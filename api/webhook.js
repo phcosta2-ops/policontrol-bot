@@ -1,8 +1,8 @@
-// Policontrol Bot v5 — Claude AI + Upstash (dados sincronizados com app)
+// Policontrol Bot v5.1 — Actions + Deadlines + Confirmation
 const TELEGRAM_TOKEN = "8619850108:AAFk2alsfSQLocua9jPOkzgUD33XPFsIrdc";
 const TG_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 const UPSTASH_URL = process.env.UPSTASH_URL || "https://smooth-dingo-93735.upstash.io";
-const UPSTASH_TOKEN = process.env.UPSTASH_TOKEN || "gQAAAAAAAW4nAAIncDIwYzk0ODBlZmViOTY0ODZkYTAyN2JhYzJjNmNjMmUxMXAyOTM3MzU";
+const UPSTASH_TOKEN = process.env.UPSTASH_TOKEN || "";
 
 const PROJECTS = [
   "Placa AP2000 (024/2024) [Des. Industrial] — turbidímetro, Maurício",
@@ -28,14 +28,15 @@ const PROJECTS = [
   "Padrão DQO (006/2026) [Des. Químico]",
 ].join("\n• ");
 
-// ========== UPSTASH ==========
 async function saveToUpstash(update) {
-  await fetch(`${UPSTASH_URL}/lpush/policontrol_updates/${encodeURIComponent(JSON.stringify(update))}`, {
+  const entry = JSON.stringify(update);
+  const res = await fetch(`${UPSTASH_URL}/lpush/poli-telegram-updates/${encodeURIComponent(entry)}`, {
     headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` }
   });
+  const d = await res.json();
+  console.log("[UPSTASH]", d.result ? "OK" : "FAIL");
 }
 
-// ========== CLAUDE ==========
 async function callClaude(sysPrompt, userMsg) {
   const CLAUDE_KEY = process.env.CLAUDE_API_KEY;
   if (!CLAUDE_KEY) throw new Error("CLAUDE_API_KEY não configurada");
@@ -49,7 +50,6 @@ async function callClaude(sysPrompt, userMsg) {
   return d.content.map(i => i.text || "").join("").replace(/```json|```/g, "").trim();
 }
 
-// ========== TELEGRAM ==========
 async function sendTG(chatId, text, replyTo, buttons) {
   const body = { chat_id: chatId, text, parse_mode: "Markdown", reply_to_message_id: replyTo };
   if (buttons) body.reply_markup = JSON.stringify({ inline_keyboard: buttons });
@@ -63,7 +63,7 @@ async function editTG(chatId, msgId, text) {
 
 // ========== HANDLER ==========
 export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(200).send("Bot Policontrol v5");
+  if (req.method !== "POST") return res.status(200).send("Bot Policontrol v5.1");
   const update = req.body;
   try {
     if (update.callback_query) { await handleCallback(update.callback_query); return res.status(200).send("OK"); }
@@ -85,7 +85,7 @@ async function classifyMessage(msg) {
   if (msg.text.length < 8) return;
   const userName = msg.from?.first_name || "Alguém";
 
-  const sysPrompt = `Analise mensagem de grupo Policontrol. Projetos:\n• ${PROJECTS}\n\nCLASSIFIQUE (JSON puro):\n- Conversa casual/pergunta/opinião → {"type":"skip"}\n- FATO concreto sobre projeto → {"type":"update","project":"nome","category":"shipping|testing|development|approval|purchase|other","whatDid":"o que fez"}`;
+  const sysPrompt = `Analise mensagem de grupo Policontrol. Projetos:\n• ${PROJECTS}\n\nJSON puro:\n- Casual/pergunta/opinião → {"type":"skip"}\n- FATO concreto → {"type":"update","project":"nome","category":"shipping|testing|development|approval|purchase|other","whatDid":"resumo"}`;
 
   try {
     const raw = await callClaude(sysPrompt, `${userName}: "${msg.text}"`);
@@ -93,12 +93,17 @@ async function classifyMessage(msg) {
     if (result.type === "skip") return;
 
     let rules = "";
-    if (result.category === "shipping") rules = `ENVIO — peça: 📅 Data, 📦 Rastreio ou foto comprovante, ⏰ Previsão entrega, ⚡ Próximo passo. Diga "manda foto ou rastreio se tiver"`;
-    else if (result.category === "testing") rules = `TESTE — OBRIGATÓRIO evidência! Peça: 📅 Data, 🔬 Dados/leituras/foto do teste (OBRIGATÓRIO!), ✅ Passou?, ⚡ Próximo passo. Diga "Preciso dos dados do teste para registrar"`;
-    else if (result.category === "approval") rules = `APROVAÇÃO — peça: 📅 Data, 👤 Quem aprovou, 📄 Documento, ⚡ Próximo passo`;
-    else rules = `GERAL — peça: 📅 Data, ⏰ Previsão, ⚡ Próximo passo, 📷 Foto se tiver`;
+    if (result.category === "shipping") rules = "ENVIO — Peça: 📅 data, 📦 rastreio/foto, ⏰ previsão entrega, ⚡ próximo passo + prazo do próximo passo. Diga: 'Se tiver, manda foto ou rastreio'";
+    else if (result.category === "testing") rules = "TESTE — OBRIGATÓRIO evidência! Peça: 📅 data, 🔬 dados/leituras/foto (SEM ISSO NÃO REGISTRO!), ⚡ próximo passo + prazo. Diga: 'Preciso dos dados do teste para registrar'";
+    else rules = "GERAL — Peça: 📅 data, ⚡ próximo passo, ⏰ prazo do próximo passo (data limite YYYY-MM-DD), 📷 foto se tiver";
 
-    const askPrompt = `Atualização do projeto "${result.project}": "${msg.text}"\n${rules}\n\nComece com "📋 *${result.project}* — anotei, ${userName}!" + entendeu + peça falta. Máx 5 linhas. Texto, não JSON.`;
+    const askPrompt = `Projeto "${result.project}", atualização: "${msg.text}"
+${rules}
+
+IMPORTANTE: Sempre pergunte qual é o PRÓXIMO PASSO e o PRAZO desse próximo passo (data limite no formato DD/MM/YYYY). Isso vai criar uma ação no app.
+
+Comece: "📋 *${result.project}* — anotei, ${userName}!" + o que entendeu + peça o que falta. Máx 5 linhas. Texto direto.`;
+
     const followUp = await callClaude(askPrompt, msg.text);
     await sendTG(msg.chat.id, followUp, msg.message_id);
   } catch (e) { console.error("Classify:", e.message); }
@@ -107,11 +112,34 @@ async function classifyMessage(msg) {
 // ========== REPLY ==========
 async function handleReply(msg) {
   const userName = msg.from?.first_name || "Alguém";
-  const botQuestion = msg.reply_to_message.text || "";
-  const originalMsg = msg.reply_to_message.reply_to_message?.text || "";
-  const isTest = /teste|leitura|resultado|evidência|validação/i.test(botQuestion);
+  const botQ = msg.reply_to_message.text || "";
+  const origMsg = msg.reply_to_message.reply_to_message?.text || "";
+  const isTesting = /teste|leitura|resultado|evidência|dados/i.test(botQ);
 
-  const sysPrompt = `Compile atualização Policontrol.\nOriginal: "${originalMsg}"\nBot: "${botQuestion}"\nResposta: "${msg.text}"\n${isTest ? "TESTE: sem dados/foto = evidenceOk=false, NÃO complete!" : ""}\n\nJSON: {"project":"nome","summary":{"action":"","date":"","evidence":"","nextStep":"","deadline":""},"evidenceOk":true/false,"complete":true/false,"followUp":"pergunta ou null"}`;
+  const sysPrompt = `Compile atualização Policontrol.
+Original: "${origMsg}"
+Bot: "${botQ}"
+Resposta: "${msg.text}"
+${isTesting ? "TESTE: sem dados/foto = evidenceOk:false, NÃO complete!" : ""}
+
+IMPORTANTE: Extraia o PRÓXIMO PASSO e seu PRAZO (formato YYYY-MM-DD). Se a pessoa disse um prazo como "até dia 20" ou "semana que vem", converta para YYYY-MM-DD.
+
+JSON: {
+  "project":"nome",
+  "summary":{
+    "action":"o que fez",
+    "date":"quando fez",
+    "evidence":"dados/rastreio ou N/A",
+    "nextStep":"próximo passo concreto",
+    "nextStepDeadline":"YYYY-MM-DD ou null",
+    "deadline":"previsão geral"
+  },
+  "evidenceOk":true/false,
+  "complete":true/false,
+  "followUp":"se incompleto, pergunta. Se completo, null"
+}
+
+Se não informou próximo passo ou prazo, marque complete=false e pergunte especificamente.`;
 
   try {
     const raw = await callClaude(sysPrompt, `${userName}: "${msg.text}"`);
@@ -123,19 +151,17 @@ async function handleReply(msg) {
     }
 
     const s = result.summary;
-    // Encode summary in callback data for Upstash save
-    const updateData = JSON.stringify({ p: result.project, a: s.action, d: s.date, e: s.evidence, n: s.nextStep, dl: s.deadline, u: userName });
-    const encodedData = Buffer.from(updateData).toString("base64").substring(0, 60);
-
     let text = `📋 *Atualização: ${result.project}*\n\n`;
-    text += `✅ *O quê:* ${s.action}\n📅 *Quando:* ${s.date}\n`;
-    if (s.evidence && s.evidence !== "N/A" && s.evidence !== "pendente") text += `🔬 *Evidência:* ${s.evidence}\n`;
-    text += `⚡ *Próximo:* ${s.nextStep}\n⏰ *Previsão:* ${s.deadline}\n`;
+    text += `✅ *O quê:* ${s.action}\n`;
+    text += `📅 *Quando:* ${s.date}\n`;
+    if (s.evidence && s.evidence !== "N/A") text += `🔬 *Evidência:* ${s.evidence}\n`;
+    if (s.nextStep) text += `⚡ *Próximo passo:* ${s.nextStep}\n`;
+    if (s.nextStepDeadline) text += `⏰ *Prazo do próximo passo:* ${s.nextStepDeadline}\n`;
     if (!result.evidenceOk) text += `\n⚠️ _Evidência pendente_\n`;
-    text += `\n👤 _${userName}_\n\n_Registro no sistema?_`;
+    text += `\n👤 _${userName}_\n\n_Registro no app e abro ação?_`;
 
     await sendTG(msg.chat.id, text, msg.message_id, [[
-      { text: "✅ Registrar", callback_data: `reg_${encodedData}` },
+      { text: "✅ Registrar + Abrir ação", callback_data: "reg" },
       { text: "❌ Descartar", callback_data: "del" }
     ]]);
   } catch (e) { console.error("Reply:", e.message); }
@@ -146,60 +172,65 @@ async function handlePhoto(msg) {
   const userName = msg.from?.first_name || "Alguém";
   const caption = msg.caption || "";
   const isReply = msg.reply_to_message && String(msg.reply_to_message.from?.id) === TELEGRAM_TOKEN.split(":")[0];
-
   if (isReply) {
-    const botQuestion = msg.reply_to_message.text || "";
-    const sysPrompt = `Foto enviada como evidência. Contexto: "${botQuestion}" Legenda: "${caption}"\nCompile JSON: {"project":"nome","summary":{"action":"","date":"","evidence":"📷 Foto${caption ? ' — '+caption : ''}","nextStep":"a definir","deadline":"a definir"}}`;
-    try {
-      const raw = await callClaude(sysPrompt, `Foto de ${userName}`);
-      const result = JSON.parse(raw);
-      const s = result.summary;
-      const updateData = JSON.stringify({ p: result.project, a: s.action, d: s.date, e: s.evidence, n: s.nextStep, dl: s.deadline, u: userName });
-      const encodedData = Buffer.from(updateData).toString("base64").substring(0, 60);
-
-      let text = `📋 *${result.project}*\n✅ ${s.action}\n📷 Foto recebida${caption ? ' — '+caption : ''}\n👤 _${userName}_\n\n_Registro?_`;
-      await sendTG(msg.chat.id, text, msg.message_id, [[
-        { text: "✅ Registrar", callback_data: `reg_${encodedData}` },
-        { text: "❌ Descartar", callback_data: "del" }
-      ]]);
-    } catch (e) { await sendTG(msg.chat.id, `📷 Foto recebida, ${userName}!`, msg.message_id); }
+    await sendTG(msg.chat.id, `📷 *Foto recebida, ${userName}!* Registrada como evidência.\n\n_Agora responda com os outros dados que pedi (por reply)._`, msg.message_id);
+  } else if (caption && caption.length > 10) {
+    await classifyMessage({ ...msg, text: caption });
   }
 }
 
 // ========== CALLBACKS ==========
 async function handleCallback(cb) {
-  const chatId = cb.message?.chat?.id, msgId = cb.message?.message_id, text = cb.message?.text || "";
+  const chatId = cb.message?.chat?.id, msgId = cb.message?.message_id;
+  const msgText = cb.message?.text || "";
+  const userName = cb.from?.first_name || "Alguém";
 
-  if (cb.data.startsWith("reg_")) {
-    // Parse update from message text (more reliable than callback data)
-    const lines = text.split("\n");
-    const project = (lines.find(l => l.includes("Atualização:")) || lines[0] || "").replace(/[📋*]/g, "").replace("Atualização:", "").trim();
-    const getField = (emoji) => { const l = lines.find(l => l.includes(emoji)); return l ? l.split(":").slice(1).join(":").replace(/\*/g, "").trim() : ""; };
-
-    const update = {
-      id: Date.now().toString(36),
-      project: project,
-      action: getField("O quê"),
-      date: getField("Quando"),
-      evidence: getField("Evidência"),
-      nextStep: getField("Próximo"),
-      deadline: getField("Previsão"),
-      userName: (lines.find(l => l.includes("👤")) || "").replace(/[👤_]/g, "").trim(),
-      timestamp: new Date().toISOString(),
-      source: "telegram"
-    };
-
-    // Salva no Upstash
-    try {
-      await saveToUpstash(update);
-      await editTG(chatId, msgId, text.replace("_Registro no sistema?_", "✅ *REGISTRADO NO SISTEMA*\n_Sincronizado com o app_"));
-      console.log("[SAVED]", update.project, update.action);
-    } catch (e) {
-      await editTG(chatId, msgId, text.replace("_Registro no sistema?_", "✅ *REGISTRADO* ⚠️ _Erro ao sincronizar_"));
-      console.error("Upstash:", e.message);
-    }
-  } else if (cb.data === "del") {
+  if (cb.data === "del") {
     await editTG(chatId, msgId, "❌ _Descartado._");
+  } else if (cb.data === "reg") {
+    try {
+      const lines = msgText.split("\n");
+      const project = (lines.find(l => l.includes("Atualização:")) || "").replace(/[*📋]/g, "").replace("Atualização:", "").trim();
+      const action = (lines.find(l => l.includes("O quê:")) || "").replace(/[*✅]/g, "").replace("O quê:", "").trim();
+      const date = (lines.find(l => l.includes("Quando:")) || "").replace(/[*📅]/g, "").replace("Quando:", "").trim();
+      const evidence = (lines.find(l => l.includes("Evidência:")) || "").replace(/[*🔬]/g, "").replace("Evidência:", "").trim();
+      const nextStep = (lines.find(l => l.includes("Próximo passo:")) || "").replace(/[*⚡]/g, "").replace("Próximo passo:", "").trim();
+      const nextDeadline = (lines.find(l => l.includes("Prazo do próximo")) || "").replace(/[*⏰]/g, "").replace("Prazo do próximo passo:", "").trim();
+
+      const updateEntry = {
+        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        project,
+        action,
+        date,
+        evidence: evidence || null,
+        nextStep: nextStep || null,
+        deadline: nextDeadline || null,
+        userName,
+        timestamp: new Date().toISOString(),
+        source: "telegram"
+      };
+
+      await saveToUpstash(updateEntry);
+      console.log("[SAVED]", project, action, "| Next:", nextStep, "| Deadline:", nextDeadline);
+
+      // Edit original message
+      await editTG(chatId, msgId, msgText.replace("_Registro no app e abro ação?_", "✅ *REGISTRADO NO APP*"));
+
+      // Send visible confirmation to group
+      let confirm = `✅ *Atualização registrada!*\n\n`;
+      confirm += `🏷 *${project}*\n`;
+      confirm += `📝 ${action}\n`;
+      if (nextStep) confirm += `\n⚡ *Nova ação criada:* ${nextStep}`;
+      if (nextDeadline) confirm += `\n⏰ *Prazo:* ${nextDeadline}`;
+      confirm += `\n\n👤 _Por ${userName} via Telegram_`;
+      confirm += `\n📱 _Visível no app para toda equipe_`;
+
+      await sendTG(chatId, confirm);
+
+    } catch (e) {
+      console.error("Save:", e.message);
+      await editTG(chatId, msgId, msgText.replace("_Registro no app e abro ação?_", "✅ *REGISTRADO* _(erro ao salvar)_"));
+    }
   }
 
   await fetch(`${TG_API}/answerCallbackQuery`, { method: "POST", headers: { "Content-Type": "application/json" },
@@ -210,7 +241,7 @@ async function handleCallback(cb) {
 async function handleCommand(msg) {
   const cmd = msg.text?.split("@")[0];
   if (cmd === "/start") {
-    await sendTG(msg.chat.id, `🤖 *Bot Policontrol v5*\n\n📱 Atualizações registradas aqui aparecem automaticamente no app!\n\n*Regras:*\n🔬 Testes → OBRIGATÓRIO evidência\n📦 Envios → Peço rastreio/foto\n\n*Como:*\n1️⃣ Mencione um projeto\n2️⃣ Responda meus pedidos com *reply*\n3️⃣ Mande fotos como evidência\n4️⃣ Confirme → aparece no app\n\n/projetos — lista`, msg.message_id);
+    await sendTG(msg.chat.id, `🤖 *Bot Policontrol v5.1*\n\n📱 Atualizações registradas aqui aparecem no app!\n⚡ Próximos passos viram ações com prazo!\n\n*Regras:*\n🔬 Testes → OBRIGATÓRIO evidência\n📦 Envios → Peço rastreio/foto\n\n*Como usar:*\n1️⃣ Mencione algo sobre um projeto\n2️⃣ Respondo pedindo detalhes (use *reply*)\n3️⃣ Confirme → registro + ação criada\n\n/projetos — ver projetos`, msg.message_id);
   } else if (cmd === "/projetos") {
     await sendTG(msg.chat.id, `📋 *Projetos:*\n\n• ${PROJECTS}`, msg.message_id);
   }
