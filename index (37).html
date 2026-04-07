@@ -1,0 +1,876 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Projetos Policontrol">
+<meta name="theme-color" content="#F2F2F7">
+<title>Projetos Policontrol</title>
+<link rel="manifest" href="manifest.json">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.23.9/babel.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Inter',-apple-system,sans-serif;background:#F2F2F7;color:#1D1D1F}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes fadeIn{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:none}}
+@keyframes recording{0%,100%{opacity:1}50%{opacity:.4}}
+input,select,textarea,button{font-family:inherit}
+</style>
+</head>
+<body>
+<div id="root"><div style="display:flex;align-items:center;justify-content:center;min-height:100vh;flex-direction:column;gap:12px"><div style="width:28px;height:28px;border:3px solid #E5E5EA;border-top-color:#007AFF;border-radius:50%;animation:spin .7s linear infinite"></div><div style="font-size:12px;color:#86868B">Carregando...</div></div></div>
+<script type="text/babel" data-presets="react">
+const {useState,useEffect,useCallback,useRef}=React;
+
+
+
+
+/* === SIMPLE SVG CHARTS (no external deps) === */
+function SimplePie({ data, size = 150, inner = 35, outer = 60 }) {
+  const total = data.reduce((s, d) => s + d.value, 0);
+  if (!total) return null;
+  let cum = 0;
+  const paths = data.map((d, i) => {
+    const start = cum / total * 2 * Math.PI - Math.PI / 2;
+    cum += d.value;
+    const end = cum / total * 2 * Math.PI - Math.PI / 2;
+    const la = d.value / total > 0.5 ? 1 : 0;
+    const cx = size / 2, cy = size / 2;
+    const x1 = cx + outer * Math.cos(start), y1 = cy + outer * Math.sin(start);
+    const x2 = cx + outer * Math.cos(end), y2 = cy + outer * Math.sin(end);
+    const x3 = cx + inner * Math.cos(end), y3 = cy + inner * Math.sin(end);
+    const x4 = cx + inner * Math.cos(start), y4 = cy + inner * Math.sin(start);
+    const path = `M${x1},${y1} A${outer},${outer} 0 ${la} 1 ${x2},${y2} L${x3},${y3} A${inner},${inner} 0 ${la} 0 ${x4},${y4} Z`;
+    return { ...d, path, pct: Math.round(d.value / total * 100) };
+  });
+  return (<svg viewBox={`0 0 ${size} ${size}`} style={{ width: "100%", maxWidth: size }}>{paths.map((p, i) => <path key={i} d={p.path} fill={p.fill} opacity={0.85}><title>{p.name}: {p.value} ({p.pct}%)</title></path>)}{paths.map((p, i) => { const angle = (paths.slice(0, i).reduce((s, x) => s + x.value, 0) + p.value / 2) / total * 2 * Math.PI - Math.PI / 2; const lx = size / 2 + (outer + 14) * Math.cos(angle); const ly = size / 2 + (outer + 14) * Math.sin(angle); return p.pct > 5 ? <text key={"l" + i} x={lx} y={ly} textAnchor="middle" dominantBaseline="middle" style={{ fontSize: 7, fill: "#6E6E73", fontFamily: "'Inter',sans-serif" }}>{p.name.slice(0, 8)}({p.value})</text> : null; })}</svg>);
+}
+
+function SimpleBar({ data, height = 170, horizontal = false, colorFn }) {
+  if (!data.length) return null;
+  const maxVal = Math.max(...data.map(d => Math.abs(d.value)));
+  if (horizontal) {
+    const bh = Math.min(22, Math.max(14, 170 / data.length));
+    const h = data.length * (bh + 4) + 10;
+    const lw = 110, cw = 300;
+    return (<svg viewBox={`0 0 ${lw + cw + 40} ${h}`} style={{ width: "100%", maxHeight: 400 }}>{data.map((d, i) => {
+      const y = i * (bh + 4) + 5;
+      const w = maxVal ? Math.abs(d.value) / maxVal * (cw / 2) : 0;
+      const isNeg = d.value < 0;
+      const x = isNeg ? lw + cw / 2 - w : lw + cw / 2;
+      const c = colorFn ? colorFn(d.value) : "#007AFF";
+      return (<g key={i}><text x={lw - 4} y={y + bh / 2 + 1} textAnchor="end" style={{ fontSize: 8, fill: "#6E6E73", fontFamily: "'Inter',sans-serif" }}>{d.name}</text><rect x={x} y={y} width={w || 1} height={bh} rx={3} fill={c} opacity={0.8}><title>{d.full || d.name}: {d.value}d</title></rect><text x={x + (isNeg ? -4 : w + 4)} y={y + bh / 2 + 1} textAnchor={isNeg ? "end" : "start"} style={{ fontSize: 7, fill: "#86868B", fontFamily: "'JetBrains Mono',monospace" }}>{d.value}d</text></g>);
+    })}<line x1={lw + cw / 2} y1={0} x2={lw + cw / 2} y2={h} stroke="#E5E5EA" strokeWidth={1} /></svg>);
+  }
+  return (<svg viewBox={`0 0 ${data.length * 50 + 20} ${height}`} style={{ width: "100%", maxHeight: height }}>{data.map((d, i) => {
+    const bw = 30, gap = 50, x = i * gap + 15;
+    const h = maxVal ? d.value / maxVal * (height - 40) : 0;
+    const y = height - 20 - h;
+    return (<g key={i}><rect x={x} y={y} width={bw} height={h} rx={4} fill={d.fill || "#007AFF"} opacity={0.8}><title>{d.full || d.name}: {d.value}</title></rect><text x={x + bw / 2} y={height - 6} textAnchor="middle" style={{ fontSize: 7, fill: "#86868B", fontFamily: "'Inter',sans-serif" }}>{d.name}</text><text x={x + bw / 2} y={y - 4} textAnchor="middle" style={{ fontSize: 8, fill: "#6E6E73", fontWeight: 600, fontFamily: "'JetBrains Mono',monospace" }}>{d.value}</text></g>);
+  })}</svg>);
+}
+
+const USERS = [
+  { id: "u1", name: "Raphael Costa", email: "raphael.costa@policontrol.com.br", color: "#007AFF" },
+  { id: "u2", name: "Rodrigo Costa", email: "rodrigo.costa@policontrol.com.br", color: "#34C759" },
+  { id: "u3", name: "Luciana Lima", email: "luciana.lima@policontrol.com.br", color: "#FF9500" },
+  { id: "u4", name: "Teresa Costa", email: "teresa.costa@policontrol.com.br", color: "#AF52DE" },
+  { id: "u5", name: "Marcelo Câmara", email: "marcelo.camara@policontrol.com.br", color: "#FF2D55" },
+];
+const AREAS = ["Des. Industrial", "Des. Químico", "Contratado", "Marketing", "Depto Técnico", "Outro"];
+const PHASES = ["Ideação", "Viabilidade", "Desenvolvimento", "Testes", "Validação", "Lançamento", "Concluído"];
+const ST = { "No prazo": { bg: "#34C75918", c: "#28A745" }, "Atrasado": { bg: "#FF3B3018", c: "#E8363C" }, "Em risco": { bg: "#FF950018", c: "#E68A00" }, "Concluído": { bg: "#8E8E9318", c: "#8E8E93" }, "Parado": { bg: "#AF52DE18", c: "#AF52DE" } };
+const ACTST = ["Pendente", "Em andamento", "Concluída", "Cancelada"];
+const gid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const fmt = d => { if (!d) return "—"; const [y, m, day] = d.split("-"); return `${day}/${m}/${y}`; };
+const fmtFull = iso => { if (!iso) return "—"; try { const d = new Date(iso); return d.toLocaleDateString("pt-BR") + " " + d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }); } catch(ex) { return iso; } };
+const isOv = d => { if (!d) return false; const t = new Date(); t.setHours(0, 0, 0, 0); return new Date(d + "T00:00:00") < t; };
+const daysTo = d => { if (!d) return null; const t = new Date(); t.setHours(0, 0, 0, 0); return Math.ceil((new Date(d + "T00:00:00") - t) / 864e5); };
+const today = () => new Date().toISOString().slice(0, 10);
+
+/* VOICE MIC BUTTON */
+function MicBtn({ onResult, sz }) {
+  const [on, setOn] = useState(false); const ref = useRef(null);
+  const SR = typeof window !== "undefined" && (window.SpeechRecognition || window.webkitSpeechRecognition);
+  if (!SR) return null;
+  const toggle = () => {
+    if (on) { ref.current?.stop(); ref.current = null; setOn(false); return; }
+    const r = new SR(); r.lang = "pt-BR"; r.continuous = true; r.interimResults = true;
+    r.onresult = e => { let t = ""; for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript; onResult(t); };
+    r.onerror = () => setOn(false); r.onend = () => setOn(false);
+    ref.current = r; r.start(); setOn(true);
+  };
+  const size = sz || 40;
+  return <button onClick={toggle} style={{ fontSize: size * .45, background: on ? "#E8363C" : "#007AFF", color: "#fff", border: "none", borderRadius: "50%", width: size, height: size, cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: on ? "0 0 16px rgba(232,54,60,0.5)" : "0 2px 8px rgba(0,122,255,0.3)", animation: on ? "recording 1.2s infinite" : "none", transition: "all .2s" }} title={on ? "Parar" : "Falar"}>{on ? "⏹" : "🎤"}</button>;
+}
+
+const ALERT_TYPES = [
+  { id: "overdue", label: "Ações atrasadas", desc: "Envia email com lista de ações vencidas", icon: "🔴" },
+  { id: "upcoming", label: "Prazos se aproximando", desc: "Alerta X dias antes do vencimento", icon: "🟡" },
+  { id: "weekly", label: "Resumo semanal", desc: "Panorama de todos os projetos", icon: "📊" },
+  { id: "stale", label: "Projetos sem atualização", desc: "Alerta projetos parados há X dias", icon: "💤" },
+];
+
+const SEED = [
+  // === DES. INDUSTRIAL ===
+  {id:"p04",name:"Placa Processadora versão 4.0 para AP2000 (024/2024)",area:"Des. Industrial",phase:"Desenvolvimento",status:"Atrasado",owner:"u1",tipo:"Melhoria",origem:"Maurício",abertura:"2024-06-05",inicio:"",previsaoFinal:"2026-05-30",reprogramado:"",possuiTAP:"Sim",possuiCronograma:"Sim",estaNoProject:"Sim",documentacao:"Sim",desvio:-68,obs:"Maurício finalizando turbidímetro",docs:[],updates:[],actions:[{id:"a10",title:"Finalizar turbidímetro",status:"Em andamento",dueDate:"2026-05-30",assignee:"u1",description:"Problema display.",createdBy:"u1",createdAt:"2024-06-05"}],dataAtualizacao:"2026-03-23"},
+  {id:"p05",name:"FlocControl Display (002/2025)",area:"Des. Industrial",phase:"Desenvolvimento",status:"Atrasado",owner:"u1",tipo:"Melhoria",origem:"Necessidade de Cliente e Prod. Industrial",abertura:"2025-05-01",inicio:"",previsaoFinal:"2025-10-30",reprogramado:"",possuiTAP:"Sim",possuiCronograma:"Sim",estaNoProject:"Sim",documentacao:"Sim",desvio:144,obs:"Recalcular cronograma",docs:[],updates:[],actions:[{id:"a13",title:"Lista componentes",status:"Em andamento",dueDate:"2026-04-30",assignee:"u1",description:"",createdBy:"u1",createdAt:"2025-12-05"},{id:"a14",title:"Receber placa MCad",status:"Pendente",dueDate:"2026-06-15",assignee:"u1",description:"",createdBy:"u1",createdAt:"2025-12-05"}],dataAtualizacao:"2026-03-23"},
+  {id:"p06",name:"MPN Reader (005/2025)",area:"Des. Industrial",phase:"Validação",status:"Atrasado",owner:"u1",tipo:"Melhoria",origem:"Raphael",abertura:"2025-04-27",inicio:"",previsaoFinal:"2025-12-06",reprogramado:"",possuiTAP:"",possuiCronograma:"",estaNoProject:"",documentacao:"",desvio:107,obs:"Entregue v1.08-6",docs:[],updates:[],actions:[{id:"a17",title:"CQ validar v1.08-6",status:"Em andamento",dueDate:"2026-04-15",assignee:"u1",description:"Cartela Idexx.",createdBy:"u1",createdAt:"2026-03-26"},{id:"a18",title:"Unicorp v8",status:"Em andamento",dueDate:"2026-05-10",assignee:"u1",description:"",createdBy:"u1",createdAt:"2026-03-16"}],dataAtualizacao:"2026-03-23"},
+  {id:"p07",name:"Medidor Presença e Ausência (006/2025)",area:"Des. Industrial",phase:"Desenvolvimento",status:"No prazo",owner:"u1",tipo:"Novo Produto",origem:"Raphael",abertura:"2025-05-01",inicio:"",previsaoFinal:"2026-02-28",reprogramado:"",possuiTAP:"Sim",possuiCronograma:"Sim",estaNoProject:"Sim",documentacao:"Sim",desvio:23,obs:"Programador externo pesquisa",docs:[],updates:[],actions:[{id:"a21",title:"Desenvolvimento externo",status:"Em andamento",dueDate:"2026-05-29",assignee:"u1",description:"Oxitop OK",createdBy:"u1",createdAt:"2026-03-19"}],dataAtualizacao:"2026-03-23"},
+  {id:"p08",name:"AquaColor Flúor (007/2025)",area:"Des. Industrial",phase:"Desenvolvimento",status:"No prazo",owner:"u1",tipo:"Melhoria",origem:"Raphael",abertura:"2025-05-01",inicio:"",previsaoFinal:"2026-02-28",reprogramado:"",possuiTAP:"Sim",possuiCronograma:"Sim",estaNoProject:"Sim",documentacao:"Sim",desvio:23,obs:"Corrente LED",docs:[],updates:[],actions:[{id:"a23",title:"Resolver corrente LED",status:"Em andamento",dueDate:"2026-08-09",assignee:"u1",description:"Maurício (27/03)",createdBy:"u1",createdAt:"2026-03-27"}],dataAtualizacao:"2026-03-23"},
+  {id:"p10",name:"Analisador Cloro Online CL Track (010/2025)",area:"Des. Industrial",phase:"Ideação",status:"Atrasado",owner:"u1",tipo:"Novo Produto",origem:"Raphael",abertura:"2025-08-22",inicio:"",previsaoFinal:"2026-01-30",reprogramado:"",possuiTAP:"",possuiCronograma:"",estaNoProject:"",documentacao:"",desvio:52,obs:"Doc 31/03",docs:[],updates:[],actions:[{id:"a30",title:"Comprar equipamentos",status:"Pendente",dueDate:"2026-03-31",assignee:"u1",description:"",createdBy:"u1",createdAt:"2026-01-30"}],dataAtualizacao:"2026-03-23"},
+  // === CONTRATADOS ===
+  {id:"p01",name:"Medidor de Cloro 2 – Tipo Pocket (005/2021)",area:"Contratado",phase:"Desenvolvimento",status:"Atrasado",owner:"u1",tipo:"Novo Produto",origem:"Raphael",abertura:"2021-05-06",inicio:"",previsaoFinal:"2022-07-30",reprogramado:"",possuiTAP:"",possuiCronograma:"",estaNoProject:"",documentacao:"",desvio:1332,obs:"Aguardando montagem da placa",docs:[],updates:[],actions:[{id:"a01",title:"Comprar conector USB",status:"Concluída",dueDate:"",assignee:"u1",description:"Componentes entregues (27/03)",createdBy:"u1",createdAt:"2025-11-25"},{id:"a02",title:"Enviar placa para Fiore",status:"Em andamento",dueDate:"2026-02-28",assignee:"u1",description:"Aguardando montagem.",createdBy:"u1",createdAt:"2025-11-25"}],dataAtualizacao:"2026-03-23"},
+  {id:"p03",name:"PoliSealer (014/2022)",area:"Contratado",phase:"Testes",status:"Atrasado",owner:"u1",tipo:"Novo Produto",origem:"Raphael",abertura:"2022-07-05",inicio:"",previsaoFinal:"2024-12-30",reprogramado:"",possuiTAP:"",possuiCronograma:"",estaNoProject:"",documentacao:"",desvio:448,obs:"Versão 7, Unicorp v8",docs:[],updates:[],actions:[{id:"a09",title:"Aprovar firmware v7 CQ",status:"Em andamento",dueDate:"2026-01-26",assignee:"u1",description:"Unicorp v8 (16/03)",createdBy:"u1",createdAt:"2026-03-16"}],dataAtualizacao:"2026-03-23"},
+  {id:"p02",name:"Dispenser para Powder Pillow (009/2023)",area:"Contratado",phase:"Desenvolvimento",status:"Atrasado",owner:"u1",tipo:"Novo Produto",origem:"Raphael",abertura:"2023-11-15",inicio:"",previsaoFinal:"2022-09-30",reprogramado:"",possuiTAP:"",possuiCronograma:"",estaNoProject:"",documentacao:"",desvio:1270,obs:"",docs:[],updates:[],actions:[{id:"a05",title:"Compra molde Victum",status:"Em andamento",dueDate:"2026-04-15",assignee:"u1",description:"Trâmites (22/03)",createdBy:"u1",createdAt:"2026-03-22"}],dataAtualizacao:"2026-03-23"},
+  {id:"p09",name:"OxiPoli (009/2025)",area:"Contratado",phase:"Testes",status:"No prazo",owner:"u1",tipo:"Novo Produto",origem:"Raphael",abertura:"2025-08-22",inicio:"",previsaoFinal:"2026-07-01",reprogramado:"",possuiTAP:"",possuiCronograma:"",estaNoProject:"",documentacao:"",desvio:-100,obs:"Base agitadora OK",docs:[],updates:[],actions:[{id:"a28",title:"Placas sensor pressão",status:"Em andamento",dueDate:"2026-06-23",assignee:"u1",description:"Material (26/03)",createdBy:"u1",createdAt:"2026-03-13"},{id:"a29",title:"Validação protótipo",status:"Em andamento",dueDate:"2026-04-30",assignee:"u1",description:"Testar.",createdBy:"u1",createdAt:"2026-03-23"}],dataAtualizacao:"2026-03-23"},
+  {id:"p11",name:"Monitor Coagulante",area:"Contratado",phase:"Validação",status:"No prazo",owner:"u1",tipo:"",origem:"",abertura:"",inicio:"",previsaoFinal:"",reprogramado:"",possuiTAP:"",possuiCronograma:"",estaNoProject:"",documentacao:"",desvio:null,obs:"AEGEA",docs:[],updates:[],actions:[{id:"a33",title:"Validação AEGEA",status:"Em andamento",dueDate:"",assignee:"u1",description:"",createdBy:"u1",createdAt:"2025-12-12"}],dataAtualizacao:"2025-12-12"},
+  {id:"p12",name:"Poli Viewer",area:"Des. Industrial",phase:"Desenvolvimento",status:"Em risco",owner:"u1",tipo:"",origem:"",abertura:"",inicio:"",previsaoFinal:"",reprogramado:"",possuiTAP:"",possuiCronograma:"",estaNoProject:"",documentacao:"",desvio:null,obs:"Etapas não mapeadas",docs:[],updates:[],actions:[{id:"a34",title:"Finalizar gabinete",status:"Em andamento",dueDate:"",assignee:"u1",description:"",createdBy:"u1",createdAt:"2025-12-10"},{id:"a35",title:"Protótipo LEDs",status:"Pendente",dueDate:"",assignee:"u1",description:"",createdBy:"u1",createdAt:"2025-12-10"}],dataAtualizacao:"2025-12-10"},
+  // === DES. QUÍMICO ===
+  {id:"pq01",name:"Powder Pillow Buffer 4",area:"Des. Químico",phase:"Ideação",status:"No prazo",owner:"u2",tipo:"Novo Produto",origem:"Raphael",abertura:"",inicio:"",previsaoFinal:"",reprogramado:"",possuiTAP:"",possuiCronograma:"",estaNoProject:"",documentacao:"",desvio:null,obs:"",docs:[],updates:[],actions:[],dataAtualizacao:"2026-03-23"},
+  {id:"pq02",name:"Powder Pillow Buffer 7",area:"Des. Químico",phase:"Ideação",status:"No prazo",owner:"u2",tipo:"Novo Produto",origem:"Raphael",abertura:"",inicio:"",previsaoFinal:"",reprogramado:"",possuiTAP:"",possuiCronograma:"",estaNoProject:"",documentacao:"",desvio:null,obs:"",docs:[],updates:[],actions:[],dataAtualizacao:"2026-03-23"},
+  {id:"pq03",name:"Powder Pillow Buffer 10",area:"Des. Químico",phase:"Ideação",status:"No prazo",owner:"u2",tipo:"Novo Produto",origem:"Raphael",abertura:"",inicio:"",previsaoFinal:"",reprogramado:"",possuiTAP:"",possuiCronograma:"",estaNoProject:"",documentacao:"",desvio:null,obs:"",docs:[],updates:[],actions:[],dataAtualizacao:"2026-03-23"},
+  {id:"p13",name:"Conjunto de reagente Cloro Online Total KIT 4 Blue-i (039/2022)",area:"Des. Químico",phase:"Desenvolvimento",status:"No prazo",owner:"u2",tipo:"Novo Produto",origem:"Raphael",abertura:"2022-11-21",inicio:"2023-08-01",previsaoFinal:"2024-06-30",reprogramado:"2026-02-28",possuiTAP:"",possuiCronograma:"",estaNoProject:"",documentacao:"",desvio:null,obs:"Em desenvolvimento",docs:[],updates:[],actions:[{id:"a37",title:"Validação reagente",status:"Em andamento",dueDate:"2026-02-28",assignee:"u2",description:"",createdBy:"u2",createdAt:"2022-11-21"}],dataAtualizacao:"2026-03-23"},
+  {id:"p14",name:"Alumínio Clone Hach (004/2023)",area:"Des. Químico",phase:"Desenvolvimento",status:"No prazo",owner:"u2",tipo:"Novo Produto",origem:"Raphael",abertura:"2023-04-20",inicio:"2023-08-07",previsaoFinal:"2024-06-30",reprogramado:"2025-12-30",possuiTAP:"Sim",possuiCronograma:"Sim",estaNoProject:"Sim",documentacao:"",desvio:null,obs:"",docs:[],updates:[],actions:[{id:"a38",title:"Desenvolvimento",status:"Em andamento",dueDate:"2025-12-30",assignee:"u2",description:"",createdBy:"u2",createdAt:"2023-04-20"}],dataAtualizacao:"2026-03-23"},
+  {id:"p15",name:"Conjunto de Reagente para Análise de Manganês (Sachê) (001/2024)",area:"Des. Químico",phase:"Testes",status:"No prazo",owner:"u2",tipo:"Novo Produto",origem:"Raphael",abertura:"",inicio:"",previsaoFinal:"2026-03-30",reprogramado:"",possuiTAP:"",possuiCronograma:"",estaNoProject:"",documentacao:"",desvio:null,obs:"Lote Piloto",docs:[],updates:[],actions:[{id:"a39",title:"Lote Piloto",status:"Em andamento",dueDate:"2026-03-30",assignee:"u2",description:"",createdBy:"u2",createdAt:"2025-12-05"}],dataAtualizacao:"2026-03-23"},
+  {id:"p16",name:"Cloro DPD Livre Pastilha (010/2024)",area:"Des. Químico",phase:"Testes",status:"No prazo",owner:"u2",tipo:"Novo Produto",origem:"Raphael",abertura:"2024-01-15",inicio:"2024-02-12",previsaoFinal:"2026-03-30",reprogramado:"",possuiTAP:"Sim",possuiCronograma:"Sim",estaNoProject:"Sim",documentacao:"",desvio:null,obs:"Ajuste máquina",docs:[],updates:[],actions:[{id:"a41",title:"Ajuste máquina",status:"Em andamento",dueDate:"2026-03-30",assignee:"u2",description:"",createdBy:"u2",createdAt:"2024-01-15"}],dataAtualizacao:"2026-03-23"},
+  {id:"p17",name:"Padrão de 1,0 NTU Estabilizado para Hach (014/2024)",area:"Des. Químico",phase:"Validação",status:"No prazo",owner:"u2",tipo:"Novo Produto",origem:"Raphael",abertura:"2024-05-20",inicio:"2024-05-29",previsaoFinal:"2025-10-30",reprogramado:"2026-05-30",possuiTAP:"Sim",possuiCronograma:"Sim",estaNoProject:"Sim",documentacao:"",desvio:null,obs:"Validação",docs:[],updates:[],actions:[{id:"a43",title:"Finalizar testes",status:"Em andamento",dueDate:"2026-05-30",assignee:"u2",description:"",createdBy:"u2",createdAt:"2024-05-20"}],dataAtualizacao:"2026-03-23"},
+  {id:"p19",name:"Spadns LaMotte e AquaColor sem arsenito – Redução Custo Neon (003/2025)",area:"Des. Químico",phase:"Desenvolvimento",status:"No prazo",owner:"u2",tipo:"Redução de Custo",origem:"Reunião de Projetos",abertura:"2025-05-07",inicio:"2025-06-02",previsaoFinal:"2025-11-30",reprogramado:"2026-05-30",possuiTAP:"Sim",possuiCronograma:"Sim",estaNoProject:"Sim",documentacao:"",desvio:null,obs:"Sem arsenito",docs:[],updates:[],actions:[{id:"a46",title:"Formulação",status:"Em andamento",dueDate:"2026-05-30",assignee:"u2",description:"",createdBy:"u2",createdAt:"2025-05-07"}],dataAtualizacao:"2026-03-23"},
+  {id:"p20",name:"Spadns LaMotte e AquaColor com arsenito – Redução Custo Neon (004/2025)",area:"Des. Químico",phase:"Desenvolvimento",status:"No prazo",owner:"u2",tipo:"Redução de Custo",origem:"Reunião de Projetos",abertura:"2025-05-07",inicio:"2025-06-02",previsaoFinal:"2025-11-30",reprogramado:"2026-05-30",possuiTAP:"Sim",possuiCronograma:"Sim",estaNoProject:"Sim",documentacao:"",desvio:null,obs:"Com arsenito",docs:[],updates:[],actions:[{id:"a47",title:"Formulação",status:"Em andamento",dueDate:"2026-05-30",assignee:"u2",description:"",createdBy:"u2",createdAt:"2025-05-07"}],dataAtualizacao:"2026-03-23"},
+  {id:"p21",name:"Stabgel Cloro (008/2025)",area:"Des. Químico",phase:"Desenvolvimento",status:"No prazo",owner:"u2",tipo:"Novo Produto",origem:"Raphael",abertura:"2025-06-24",inicio:"2025-06-24",previsaoFinal:"2026-09-29",reprogramado:"",possuiTAP:"Sim",possuiCronograma:"Sim",estaNoProject:"Sim",documentacao:"",desvio:null,obs:"",docs:[],updates:[],actions:[{id:"a48",title:"Desenvolvimento",status:"Em andamento",dueDate:"2026-09-29",assignee:"u2",description:"",createdBy:"u2",createdAt:"2025-06-24"}],dataAtualizacao:"2026-03-23"},
+  {id:"p22",name:"Nitrogênio Total (011/2025)",area:"Des. Químico",phase:"Ideação",status:"Parado",owner:"u2",tipo:"Novo Produto",origem:"Raphael",abertura:"2025-10-02",inicio:"2026-03-09",previsaoFinal:"2027-03-30",reprogramado:"",possuiTAP:"",possuiCronograma:"",estaNoProject:"",documentacao:"",desvio:null,obs:"Aguardando MP",docs:[],updates:[],actions:[{id:"a49",title:"Matéria prima",status:"Pendente",dueDate:"2026-01-12",assignee:"u2",description:"",createdBy:"u2",createdAt:"2025-10-02"}],dataAtualizacao:"2026-03-23"},
+  {id:"pq10",name:"Fósforo Total (012/2025)",area:"Des. Químico",phase:"Ideação",status:"No prazo",owner:"u2",tipo:"Novo Produto",origem:"Raphael",abertura:"2025-10-02",inicio:"2026-03-09",previsaoFinal:"2027-03-30",reprogramado:"",possuiTAP:"",possuiCronograma:"",estaNoProject:"",documentacao:"",desvio:null,obs:"",docs:[],updates:[],actions:[],dataAtualizacao:"2026-03-23"},
+  {id:"pq11",name:"Cloro DPD Sachê China (013/2025)",area:"Des. Químico",phase:"Desenvolvimento",status:"No prazo",owner:"u2",tipo:"Redução de Custo",origem:"Adriana – Suprimentos",abertura:"2025-10-28",inicio:"2025-10-29",previsaoFinal:"2026-03-31",reprogramado:"",possuiTAP:"",possuiCronograma:"",estaNoProject:"",documentacao:"",desvio:null,obs:"Fornecedor XI'AN YI HANG",docs:[],updates:[],actions:[],dataAtualizacao:"2026-03-23"},
+  {id:"pq12",name:"Cloro DPD Sachê Shaanxi (001/2026)",area:"Des. Químico",phase:"Desenvolvimento",status:"No prazo",owner:"u2",tipo:"Redução de Custo",origem:"Adriana – Suprimentos",abertura:"2026-01-21",inicio:"2026-01-22",previsaoFinal:"2026-04-30",reprogramado:"",possuiTAP:"",possuiCronograma:"",estaNoProject:"",documentacao:"",desvio:null,obs:"Fornecedor Shaanxi Dideu",docs:[],updates:[],actions:[],dataAtualizacao:"2026-03-23"},
+  {id:"pq13",name:"Reagente Cloro DPD Total Pó Online (002/2026)",area:"Des. Químico",phase:"Desenvolvimento",status:"No prazo",owner:"u2",tipo:"Novo Produto",origem:"Teresa",abertura:"2026-02-02",inicio:"2026-02-02",previsaoFinal:"2026-08-02",reprogramado:"",possuiTAP:"",possuiCronograma:"",estaNoProject:"",documentacao:"",desvio:null,obs:"",docs:[],updates:[],actions:[],dataAtualizacao:"2026-03-23"},
+  {id:"pq14",name:"Cloro DPD Sachê Total China (003/2026)",area:"Des. Químico",phase:"Desenvolvimento",status:"No prazo",owner:"u2",tipo:"Redução de Custo",origem:"Adriana – Suprimentos",abertura:"2026-02-27",inicio:"2026-03-04",previsaoFinal:"2026-07-02",reprogramado:"",possuiTAP:"",possuiCronograma:"",estaNoProject:"",documentacao:"",desvio:null,obs:"XI'AN YI HANG",docs:[],updates:[],actions:[],dataAtualizacao:"2026-03-23"},
+  {id:"pq15",name:"Cloro DPD Sachê Total Shaanxi (004/2026)",area:"Des. Químico",phase:"Desenvolvimento",status:"No prazo",owner:"u2",tipo:"Redução de Custo",origem:"Adriana – Suprimentos",abertura:"2026-02-27",inicio:"2026-03-04",previsaoFinal:"2026-07-02",reprogramado:"",possuiTAP:"",possuiCronograma:"",estaNoProject:"",documentacao:"",desvio:null,obs:"Shaanxi Dideu",docs:[],updates:[],actions:[],dataAtualizacao:"2026-03-23"},
+  {id:"pq16",name:"Cloro DPD Sachê Total Neon (005/2026)",area:"Des. Químico",phase:"Desenvolvimento",status:"No prazo",owner:"u2",tipo:"Redução de Custo",origem:"Adriana – Suprimentos",abertura:"2026-02-27",inicio:"2026-03-04",previsaoFinal:"2026-07-02",reprogramado:"",possuiTAP:"",possuiCronograma:"",estaNoProject:"",documentacao:"",desvio:null,obs:"NEON",docs:[],updates:[],actions:[],dataAtualizacao:"2026-03-23"},
+  {id:"pq17",name:"Padrão DQO 1000 mg/L (006/2026)",area:"Des. Químico",phase:"Desenvolvimento",status:"No prazo",owner:"u2",tipo:"Melhoria",origem:"Luciana – Produto",abertura:"2026-03-13",inicio:"2026-03-23",previsaoFinal:"2026-11-30",reprogramado:"",possuiTAP:"",possuiCronograma:"",estaNoProject:"",documentacao:"",desvio:null,obs:"Aumento de validade",docs:[],updates:[],actions:[],dataAtualizacao:"2026-03-23"},
+  {id:"pq18",name:"Reagente Cloro DPD Líquido China (007/2026)",area:"Des. Químico",phase:"Desenvolvimento",status:"No prazo",owner:"u2",tipo:"Redução de Custo",origem:"Adriana – Suprimentos",abertura:"2026-03-23",inicio:"2026-03-24",previsaoFinal:"2026-07-30",reprogramado:"",possuiTAP:"",possuiCronograma:"",estaNoProject:"",documentacao:"",desvio:null,obs:"Shaanxi Dideu Livre/Total",docs:[],updates:[],actions:[],dataAtualizacao:"2026-03-23"},
+];
+
+const callAI = async (systemPrompt, userMsg) => {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST", headers: { "Content-Type": "application/json", "x-api-key": (localStorage.getItem("poli-api-key") || ""), "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1500, system: systemPrompt, messages: [{ role: "user", content: userMsg }] })
+  });
+  const d = await res.json();
+  if (d.error) throw new Error(d.error.message || "Erro API");
+  const raw = d.content.map(i => i.text || "").join("").replace(/```json|```/g, "").trim();
+  return raw;
+};
+
+const initData = { projects: SEED, users: USERS, alerts: [], auditLog: [] };
+
+function App() {
+  const [data, setData] = useState(null); const [user, setUser] = useState(null); const [view, setView] = useState("dashboard"); const [selProj, setSelProj] = useState(null); const [showPF, setShowPF] = useState(false); const [showAF, setShowAF] = useState(false); const [editP, setEditP] = useState(null); const [editA, setEditA] = useState(null); const [notif, setNotif] = useState(null); const [search, setSearch] = useState(""); const [fSt, setFSt] = useState("Todos"); const [showUpd, setShowUpd] = useState(false); const [dtab, setDtab] = useState("acoes"); const [loading, setLoading] = useState(true);
+  const [loginPending, setLoginPending] = useState(null); const [pwInput, setPwInput] = useState(""); const [pwErr, setPwErr] = useState(false);
+  const flash = (m, t = "ok") => { setNotif({ m, t }); setTimeout(() => setNotif(null), 3500); };
+  const load = useCallback(function() { try { const d=localStorage.getItem("poli-v13"); d ? setData(JSON.parse(d)) : (setData(initData), localStorage.setItem("poli-v13",JSON.stringify(initData))); } catch(ex) { setData(initData); } setLoading(false); }, []);
+  const save = useCallback(function(d) { setData(d); try { localStorage.setItem("poli-v13",JSON.stringify(d)); } catch(ex) {} }, []);
+  
+  // Sync Telegram updates from Upstash
+  const syncTelegram = useCallback(async (currentData) => {
+    if (!currentData) return;
+    try {
+      const res = await fetch("https://smooth-dingo-93735.upstash.io/lrange/policontrol_updates/0/-1", {
+        headers: { Authorization: "Bearer gQAAAAAAAW4nAAIncDIwYzk0ODBlZmViOTY0ODZkYTAyN2JhYzJjNmNjMmUxMXAyOTM3MzU" }
+      });
+      const d = await res.json();
+      if (!d.result || !d.result.length) return;
+      
+      let updated = false;
+      const projects = [...currentData.projects];
+      
+      d.result.forEach(raw => {
+        try {
+          const tgUpdate = JSON.parse(raw);
+          if (!tgUpdate.project || !tgUpdate.id) return;
+          
+          // Find matching project by name
+          const proj = projects.find(p => 
+            p.name.toLowerCase().includes(tgUpdate.project.toLowerCase().split("(")[0].trim()) ||
+            tgUpdate.project.toLowerCase().includes(p.name.toLowerCase().split("(")[0].trim())
+          );
+          if (!proj) return;
+          
+          // Check if already added
+          if ((proj.updates || []).some(u => u.telegramId === tgUpdate.id)) return;
+          
+          // Add as update
+          proj.updates = [...(proj.updates || []), {
+            id: "tg_" + tgUpdate.id,
+            telegramId: tgUpdate.id,
+            userId: "telegram",
+            timestamp: tgUpdate.timestamp,
+            date: tgUpdate.date || "",
+            text: `${tgUpdate.action}${tgUpdate.evidence ? "\n🔬 " + tgUpdate.evidence : ""}${tgUpdate.nextStep ? "\n⚡ Próximo: " + tgUpdate.nextStep : ""}${tgUpdate.deadline ? "\n⏰ Previsão: " + tgUpdate.deadline : ""}`,
+            manualPost: true,
+            fromTelegram: true,
+            telegramUser: tgUpdate.userName,
+            images: []
+          }];
+          proj.dataAtualizacao = new Date().toISOString().slice(0, 10);
+          updated = true;
+        } catch(ex) {}
+      });
+      
+      if (updated) {
+        const nd = { ...currentData, projects };
+        setData(nd);
+        try { await window.storage.set("poli-v13", JSON.stringify(nd), true); } catch(ex) {}
+      }
+    } catch(ex) { console.log("Sync:", ex.message); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { if (!user) return; const i = setInterval(() => { load(); syncTelegram(data); }, 12000); return () => clearInterval(i); }, [user, load, syncTelegram, data]);
+  useEffect(() => { if (data && user) syncTelegram(data); }, [user]);
+
+  if (loading) return <div style={S.ctr}><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" /><style>{S.kf}</style><div style={S.spin} /></div>;
+  const P = data?.projects || [], U = data?.users || USERS, alerts = data?.alerts || [], audit = data?.auditLog || [];
+  const un = id => (U.find(u => u.id === id) || {}).name || "—"; const uc = id => (U.find(u => u.id === id) || {}).color || "#8E8E93";
+  const addAudit = (action, detail, userId) => { const log = [...(data?.auditLog || []), { id: gid(), action, detail, userId: userId || user?.id, timestamp: new Date().toISOString() }]; save({ ...data, auditLog: log.slice(-100) }); };
+
+  const tryLogin = (u) => {
+    if (u.password) { setLoginPending(u); setPwInput(""); setPwErr(false); }
+    else { setUser(u); }
+  };
+  const confirmLogin = () => {
+    if (pwInput === loginPending.password) { setUser(loginPending); setLoginPending(null); setPwInput(""); setPwErr(false); }
+    else { setPwErr(true); }
+  };
+
+  if (!user) return (<div style={{ ...S.ctr, background: "#F2F2F7" }}><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" /><style>{S.kf}</style>
+    <div style={{ background: "#fff", borderRadius: 20, padding: "40px 32px", maxWidth: 400, width: "100%", textAlign: "center", boxShadow: "0 2px 20px rgba(0,0,0,0.06)" }}>
+      <div style={{ fontSize: 32, marginBottom: 6 }}>◈</div>
+      <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Projetos Policontrol</h1>
+      <p style={{ fontSize: 13, color: "#86868B", marginTop: 4 }}>Selecione seu perfil:</p>
+      <div style={{ height: 1, background: "#E5E5EA", margin: "20px 0" }} />
+
+      {!loginPending ? (
+        <div style={{ display: "grid", gridTemplateColumns: U.length > 4 ? "1fr 1fr 1fr" : "1fr 1fr", gap: 8 }}>
+          {U.map(u => <button key={u.id} onClick={() => tryLogin(u)} style={{ fontFamily: "'Inter',sans-serif", fontSize: 13, fontWeight: 600, background: "#F9F9F9", color: "#1D1D1F", border: "2px solid #E5E5EA", borderRadius: 12, padding: "12px 8px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, transition: "all .2s" }} onMouseEnter={e => { e.currentTarget.style.background = u.color; e.currentTarget.style.color = "#fff"; e.currentTarget.style.borderColor = u.color; }} onMouseLeave={e => { e.currentTarget.style.background = "#F9F9F9"; e.currentTarget.style.color = "#1D1D1F"; e.currentTarget.style.borderColor = "#E5E5EA"; }}>
+            <span style={{ width: 9, height: 9, borderRadius: "50%", background: u.color }} />{u.name}{u.password && <span style={{ fontSize: 10 }}>🔒</span>}
+          </button>)}
+        </div>
+      ) : (
+        <div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginBottom: 16 }}>
+            <span style={{ width: 14, height: 14, borderRadius: "50%", background: loginPending.color }} />
+            <span style={{ fontSize: 16, fontWeight: 700 }}>{loginPending.name}</span>
+          </div>
+          <input type="password" value={pwInput} onChange={e => { setPwInput(e.target.value); setPwErr(false); }} onKeyDown={e => e.key === "Enter" && confirmLogin()} placeholder="Digite sua senha" style={{ ...S.inp, textAlign: "center", fontSize: 16, padding: "12px", marginBottom: 8 }} autoFocus />
+          {pwErr && <p style={{ fontSize: 12, color: "#E8363C", marginBottom: 8 }}>Senha incorreta</p>}
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => { setLoginPending(null); setPwErr(false); }} style={{ fontFamily: "inherit", flex: 1, fontSize: 13, background: "#F2F2F7", color: "#86868B", border: "none", borderRadius: 10, padding: 12, cursor: "pointer" }}>Voltar</button>
+            <button onClick={confirmLogin} style={{ ...S.btn, flex: 1, padding: 12, fontSize: 13, borderRadius: 10 }}>Entrar</button>
+          </div>
+        </div>
+      )}
+    </div>
+  </div>);
+
+  const myAct = P.flatMap(p => (p.actions || []).filter(a => a.assignee === user.id && a.status !== "Concluída" && a.status !== "Cancelada").map(a => ({ ...a, pName: p.name, pId: p.id }))); const ovAct = myAct.filter(a => isOv(a.dueDate));
+  const filtered = P.filter(p => { if (search && !p.name.toLowerCase().includes(search.toLowerCase())) return false; if (fSt !== "Todos" && p.status !== fSt) return false; return true; });
+  const saveProj = proj => { let np; if (editP) np = P.map(p => p.id === editP.id ? { ...editP, ...proj } : p); else np = [...P, { ...proj, id: gid(), actions: [], docs: [], updates: [], createdBy: user.id, createdAt: today() }]; save({ ...data, projects: np }); setShowPF(false); setEditP(null); flash("OK!"); };
+  const delProj = id => { if (!confirm("Excluir?")) return; save({ ...data, projects: P.filter(p => p.id !== id) }); setSelProj(null); setView("projects"); };
+  const saveAct = a => { const pr = P.find(p => p.id === selProj); if (!pr) return; let na; if (editA) na = pr.actions.map(x => x.id === editA.id ? { ...editA, ...a } : x); else na = [...(pr.actions || []), { ...a, id: gid(), createdBy: user.id, createdAt: today() }]; save({ ...data, projects: P.map(p => p.id === selProj ? { ...p, actions: na, dataAtualizacao: today() } : p) }); setShowAF(false); setEditA(null); flash("OK!"); };
+  const delAct = aid => { const pr = P.find(p => p.id === selProj); if (!pr) return; save({ ...data, projects: P.map(p => p.id === selProj ? { ...p, actions: p.actions.filter(a => a.id !== aid) } : p) }); };
+  const updSt = (pid, aid, st) => save({ ...data, projects: P.map(p => p.id === pid ? { ...p, actions: p.actions.map(a => a.id === aid ? { ...a, status: st, lastModBy: user.id, lastModAt: new Date().toISOString() } : a), dataAtualizacao: today() } : p) });
+  const applyAI = (result) => { let np = [...P]; const proj = np.find(p => p.id === result.projectId); if (!proj) return; if (result.completeActions?.length) result.completeActions.forEach(aid => { proj.actions = (proj.actions || []).map(a => a.id === aid ? { ...a, status: "Concluída" } : a); }); if (result.newActions?.length) result.newActions.forEach(na => { proj.actions = [...(proj.actions || []), { id: gid(), title: na.title, description: na.description || "", dueDate: na.dueDate || "", status: "Pendente", assignee: user.id, createdBy: user.id, createdAt: today() }]; }); if (result.newStatus) proj.status = result.newStatus; if (result.newObs) proj.obs = result.newObs; proj.updates = [...(proj.updates || []), { id: gid(), userId: user.id, timestamp: new Date().toISOString(), text: result.originalText }]; proj.dataAtualizacao = today(); save({ ...data, projects: np }); };
+
+  const cp = P.find(p => p.id === selProj);
+  const statusData = Object.keys(ST).map(s => ({ name: s, value: P.filter(p => p.status === s).length })).filter(d => d.value > 0);
+  const phaseData = PHASES.map(ph => ({ name: ph.length > 7 ? ph.slice(0, 7) : ph, full: ph, value: P.filter(p => p.phase === ph).length })).filter(d => d.value > 0);
+  const areaCharts = ["Des. Industrial", "Des. Químico", "Contratado"].map(area => ({
+    area, data: Object.keys(ST).map(s => ({ name: s, value: P.filter(p => p.area === area && p.status === s).length })).filter(d => d.value > 0),
+    total: P.filter(p => p.area === area).length
+  })).filter(a => a.total > 0);
+  const Badge = ({ status }) => { const s = ST[status] || { bg: "#E5E5EA", c: "#8E8E93" }; return <span style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 8, background: s.bg, color: s.c, whiteSpace: "nowrap" }}>{status}</span>; };
+
+  /* ===== EMAIL GENERATORS ===== */
+  const genOverdueEmail = () => { const items = P.flatMap(p => (p.actions || []).filter(a => isOv(a.dueDate) && a.status !== "Concluída" && a.status !== "Cancelada").map(a => `• ${p.name}: "${a.title}" — Venceu ${fmt(a.dueDate)}`)); if (!items.length) return null; return { subject: `⚠ ${items.length} ações atrasadas — Projetos Policontrol`, body: `Ações atrasadas (${fmt(today())}):\n\n${items.join("\n")}\n\nAcesse o app para atualizar.` }; };
+  const genUpcomingEmail = (days = 7) => { const items = P.flatMap(p => (p.actions || []).filter(a => { const d = daysTo(a.dueDate); return d !== null && d >= 0 && d <= days && a.status !== "Concluída" && a.status !== "Cancelada"; }).map(a => `• ${p.name}: "${a.title}" — Vence ${fmt(a.dueDate)} (${daysTo(a.dueDate)} dias)`)); if (!items.length) return null; return { subject: `📅 ${items.length} prazos nos próximos ${days} dias`, body: `Prazos se aproximando:\n\n${items.join("\n")}\n\nAcesse o app para atualizar.` }; };
+  const genWeeklyEmail = () => { const atrasados = P.filter(p => p.status === "Atrasado").length; const risco = P.filter(p => p.status === "Em risco").length; const prazo = P.filter(p => p.status === "No prazo").length; const acoes = P.reduce((s, p) => s + (p.actions || []).filter(a => a.status !== "Concluída" && a.status !== "Cancelada").length, 0); const lines = P.filter(p => p.phase !== "Concluído").map(p => { const pend = (p.actions || []).filter(a => a.status !== "Concluída" && a.status !== "Cancelada").length; return `• ${p.name} [${p.status}] — ${p.phase} — ${pend} ações pendentes`; }); return { subject: `📊 Resumo Semanal Projetos — ${fmt(today())}`, body: `Resumo Projetos Policontrol (${fmt(today())}):\n\n✅ No prazo: ${prazo}\n⚠ Atrasados: ${atrasados}\n🟡 Em risco: ${risco}\n📋 Ações pendentes: ${acoes}\n\nDetalhes:\n${lines.join("\n")}\n\nAcesse o app para mais detalhes.` }; };
+  const genStaleEmail = (days = 14) => { const stale = P.filter(p => { if (!p.dataAtualizacao || p.phase === "Concluído") return false; const d = daysTo(p.dataAtualizacao); return d !== null && Math.abs(d) >= days; }); if (!stale.length) return null; return { subject: `💤 ${stale.length} projetos sem atualização há ${days}+ dias`, body: `Projetos parados:\n\n${stale.map(p => `• ${p.name} — Última atualização: ${fmt(p.dataAtualizacao)}`).join("\n")}\n\nAcesse o app para atualizar.` }; };
+
+  const openMailto = (emails, emailData) => { if (!emailData) { flash("Nenhum item encontrado para este alerta", "w"); return; } const mailto = `mailto:${emails}?subject=${encodeURIComponent(emailData.subject)}&body=${encodeURIComponent(emailData.body)}`; window.open(mailto, "_blank"); };
+
+  return (<div style={{ background: "#F2F2F7", minHeight: "100vh", fontFamily: "'Inter',sans-serif", color: "#1D1D1F" }}>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" /><style>{S.kf}</style>
+    {notif && <div style={{ position: "fixed", top: 14, left: "50%", transform: "translateX(-50%)", color: "#fff", fontSize: 13, fontWeight: 600, padding: "10px 20px", borderRadius: 12, zIndex: 9999, animation: "fadeIn .2s", background: notif.t === "w" ? "#FF9500" : notif.t === "err" ? "#E8363C" : "#34C759", boxShadow: "0 4px 12px rgba(0,0,0,0.2)", maxWidth: "90%", textAlign: "center" }}>{notif.m}</div>}
+
+    <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 16px", background: "rgba(255,255,255,0.85)", backdropFilter: "blur(20px)", borderBottom: "1px solid #E5E5EA", position: "sticky", top: 0, zIndex: 100, flexWrap: "wrap", gap: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontSize: 18 }}>◈</span><h1 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>Projetos Policontrol</h1></div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <button onClick={() => setShowUpd(true)} style={{ fontFamily: "inherit", fontSize: 12, fontWeight: 600, background: "#007AFF", color: "#fff", border: "none", borderRadius: 18, padding: "8px 16px", cursor: "pointer", boxShadow: "0 2px 8px rgba(0,122,255,0.3)" }}>🎤 Atualizar</button>
+        <span style={{ fontSize: 11, color: "#86868B", display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 7, height: 7, borderRadius: "50%", background: user.color }} />{user.name}</span>
+        <button onClick={() => { setUser(null); setView("dashboard"); setSelProj(null); }} style={{ fontFamily: "inherit", fontSize: 10, background: "#F2F2F7", color: "#86868B", border: "none", borderRadius: 6, padding: "4px 8px", cursor: "pointer" }}>Sair</button>
+      </div>
+    </header>
+
+    <nav style={{ display: "flex", gap: 2, padding: "7px 16px", background: "rgba(255,255,255,0.6)", backdropFilter: "blur(10px)", borderBottom: "1px solid #E5E5EA", flexWrap: "wrap", overflowX: "auto" }}>
+      {[{ k: "dashboard", l: "Dashboard" }, { k: "projects", l: "Projetos" }, { k: "myactions", l: `Ações${myAct.length ? ` (${myAct.length})` : ""}` }, { k: "automation", l: "⚡ Automação" }, { k: "settings", l: "Config" }].map(i => (
+        <button key={i.k} onClick={() => { setView(i.k); setSelProj(null); setShowPF(false); setShowAF(false); setDtab("acoes"); }} style={{ fontFamily: "inherit", fontSize: 11, fontWeight: 600, background: view === i.k ? "#007AFF" : "transparent", color: view === i.k ? "#fff" : (i.k === "myactions" && ovAct.length ? "#E8363C" : "#86868B"), border: "none", borderRadius: 18, padding: "6px 13px", cursor: "pointer", display: "flex", alignItems: "center", gap: 3, whiteSpace: "nowrap" }}>{i.l}{i.k === "myactions" && ovAct.length > 0 && <span style={{ background: "#E8363C", color: "#fff", fontSize: 8, fontWeight: 700, borderRadius: 6, padding: "1px 5px" }}>{ovAct.length}</span>}</button>))}
+    </nav>
+
+    {showUpd && <SmartUpdate projects={P} userId={user.id} onApply={r => { applyAI(r); setShowUpd(false); flash("✅ " + r.summary); }} onClose={() => setShowUpd(false)} />}
+
+    <main style={{ maxWidth: 1060, margin: "0 auto", padding: "18px 16px 50px" }}>
+      {/* DASHBOARD */}
+      {view === "dashboard" && <div><h2 style={S.h2}>Dashboard</h2><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(100px,1fr))", gap: 8, marginBottom: 16 }}>{[{ l: "Projetos", v: P.length, c: "#007AFF" }, { l: "No Prazo", v: P.filter(p => p.status === "No prazo").length, c: "#34C759" }, { l: "Atrasados", v: P.filter(p => p.status === "Atrasado").length, c: "#E8363C" }, { l: "Em Risco", v: P.filter(p => p.status === "Em risco").length, c: "#FF9500" }].map((x, i) => (<div key={i} style={S.card}><div style={{ fontSize: 24, fontWeight: 700, fontFamily: "'JetBrains Mono',monospace", color: x.c }}>{x.v}</div><div style={{ fontSize: 10, color: "#86868B", fontWeight: 600 }}>{x.l}</div></div>))}</div>
+        {ovAct.length > 0 && <div style={{ ...S.card, border: "1px solid #FF3B3022", background: "#FFF5F5", marginBottom: 10 }}><div style={{ fontSize: 12, fontWeight: 700, color: "#E8363C", marginBottom: 3 }}>⚠ {ovAct.length} atrasada(s)</div>{ovAct.slice(0, 3).map(a => <div key={a.id} style={{ fontSize: 11, color: "#6E6E73", marginTop: 2 }}><strong>{a.title}</strong> — {a.pName}</div>)}</div>}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 10, marginBottom: 14 }}>
+          {areaCharts.map(ac => (<div key={ac.area} style={S.card}><div style={{ fontSize: 11, fontWeight: 700, color: "#86868B", marginBottom: 4 }}>{ac.area} <span style={{ fontWeight: 400 }}>({ac.total})</span></div><SimplePie data={ac.data.map(e=>({...e, fill: ST[e.name]?.c}))} size={150} inner={32} outer={58} /></div>))}
+        </div>
+
+        {/* DESLOCAMENTO */}
+        {(() => {
+          const calcDesl = (proj) => {
+            const target = proj.reprogramado || proj.previsaoFinal;
+            if (!target || proj.phase === "Concluído") return null;
+            const dias = daysTo(target);
+            return dias < 0 ? Math.abs(dias) : 0;
+          };
+          const areasDesl = ["Des. Industrial", "Des. Químico", "Contratado"].map(area => {
+            const projs = P.filter(p => p.area === area && p.phase !== "Concluído");
+            const vals = projs.map(p => ({ name: p.name, desl: calcDesl(p), target: p.reprogramado || p.previsaoFinal })).filter(v => v.desl !== null);
+            const avg = vals.length ? Math.round(vals.reduce((s, v) => s + v.desl, 0) / vals.length) : null;
+            const overdue = vals.filter(v => v.desl > 0);
+            return { area, avg, total: vals.length, overdue: overdue.length, projects: vals.sort((a, b) => b.desl - a.desl) };
+          }).filter(a => a.total > 0);
+          const allVals = P.filter(p => p.phase !== "Concluído").map(p => calcDesl(p)).filter(v => v !== null);
+          const avgGeral = allVals.length ? Math.round(allVals.reduce((s, v) => s + v, 0) / allVals.length) : null;
+
+          return (<div style={{ ...S.card, marginBottom: 14 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+              <span style={{ fontSize: 16 }}>📐</span>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700 }}>Deslocamento dos Projetos</div>
+                <div style={{ fontSize: 10, color: "#86868B" }}>Dias de atraso além da data prevista (0 = no prazo)</div>
+              </div>
+            </div>
+
+            {/* Média por área */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 8, marginBottom: 14 }}>
+              {areasDesl.map(a => (
+                <div key={a.area} style={{ background: "#F9F9F9", borderRadius: 10, padding: 12, textAlign: "center" }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: "#86868B", marginBottom: 4 }}>{a.area}</div>
+                  <div style={{ fontSize: 28, fontWeight: 700, fontFamily: "'JetBrains Mono',monospace", color: a.avg > 0 ? "#E8363C" : "#34C759" }}>
+                    {a.avg}d
+                  </div>
+                  <div style={{ fontSize: 9, color: "#AEAEB2", marginTop: 2 }}>média · {a.total} projeto(s)</div>
+                  {a.overdue > 0 && <div style={{ fontSize: 9, color: "#E8363C", marginTop: 2 }}>{a.overdue} atrasado(s)</div>}
+                </div>
+              ))}
+              {avgGeral !== null && <div style={{ background: "#F0F9FF", borderRadius: 10, padding: 12, textAlign: "center", border: "1px solid #007AFF22" }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: "#007AFF", marginBottom: 4 }}>GERAL</div>
+                <div style={{ fontSize: 28, fontWeight: 700, fontFamily: "'JetBrains Mono',monospace", color: avgGeral > 0 ? "#E8363C" : "#34C759" }}>
+                  {avgGeral}d
+                </div>
+                <div style={{ fontSize: 9, color: "#AEAEB2", marginTop: 2 }}>média geral</div>
+              </div>}
+            </div>
+
+            {/* Gráfico de barras - só projetos atrasados */}
+            {(() => {
+              const barData = P.filter(p => p.phase !== "Concluído" && calcDesl(p) > 0)
+                .map(p => ({ name: p.name.length > 20 ? p.name.slice(0, 20) + "…" : p.name, full: p.name, dias: calcDesl(p), area: p.area }))
+                .sort((a, b) => b.dias - a.dias);
+              if (!barData.length) return <div style={{ textAlign: "center", color: "#34C759", fontSize: 12, fontWeight: 600, padding: 12 }}>✓ Todos os projetos no prazo!</div>;
+              return (<div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#86868B", marginBottom: 6 }}>Projetos Atrasados (dias de atraso)</div>
+                <SimpleBar data={barData.map(d=>({...d, value: d.dias}))} horizontal={true} colorFn={v => v > 100 ? "#E8363C" : v > 30 ? "#FF9500" : "#FF9500AA"} />
+              </div>);
+            })()}
+          </div>);
+        })()}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(250px,1fr))", gap: 10 }}>
+          <div style={S.card}><div style={{ fontSize: 11, fontWeight: 700, color: "#86868B", marginBottom: 6 }}>Status Geral</div><SimplePie data={statusData.map(e=>({...e, fill: ST[e.name]?.c}))} size={170} inner={38} outer={65} /></div>
+          <div style={S.card}><div style={{ fontSize: 11, fontWeight: 700, color: "#86868B", marginBottom: 6 }}>Por Fase</div><SimpleBar data={phaseData} /></div>
+        </div>
+      </div>}
+
+      {/* PROJECTS TABLE */}
+      {view === "projects" && !selProj && <div><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}><h2 style={S.h2}>Projetos</h2><button onClick={() => { setEditP(null); setShowPF(true); }} style={S.btn}>+ Novo</button></div><div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}><input placeholder="Buscar..." value={search} onChange={e => setSearch(e.target.value)} style={{ ...S.inp, flex: 1, minWidth: 100 }} /><select value={fSt} onChange={e => setFSt(e.target.value)} style={{ ...S.inp, width: "auto" }}><option value="Todos">Status</option>{Object.keys(ST).map(x => <option key={x}>{x}</option>)}</select></div>{showPF && <FP proj={editP} users={U} onSave={saveProj} onCancel={() => { setShowPF(false); setEditP(null); }} />}<div style={{ overflowX: "auto", borderRadius: 12, background: "#fff", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, minWidth: 880 }}><thead><tr style={{ background: "#FAFAFA" }}>{["", "Projeto", "Área", "Tipo", "Status", "Fase", "Início", "Previsão", "Desvio", ""].map((h, i) => <th key={i} style={{ padding: "9px 6px", textAlign: "left", color: "#86868B", fontWeight: 700, fontSize: 9, textTransform: "uppercase", borderBottom: "1px solid #F2F2F7" }}>{h}</th>)}</tr></thead><tbody>{filtered.map(p => { const ov = (p.actions || []).filter(a => isOv(a.dueDate) && a.status !== "Concluída" && a.status !== "Cancelada").length; return (<tr key={p.id} onClick={() => { setSelProj(p.id); setDtab("acoes"); }} style={{ cursor: "pointer" }} onMouseEnter={e => e.currentTarget.style.background = "#F9FAFC"} onMouseLeave={e => e.currentTarget.style.background = "#fff"}><td style={S.td}><span style={{ width: 6, height: 6, borderRadius: "50%", background: ST[p.status]?.c, display: "inline-block" }} /></td><td style={{ ...S.td, fontWeight: 600, maxWidth: 180 }}>{p.name}</td><td style={{ ...S.td, color: "#86868B", fontSize: 10 }}>{p.area}</td><td style={{ ...S.td, color: "#86868B", fontSize: 9 }}>{p.tipo || "—"}</td><td style={S.td}><Badge status={p.status} /></td><td style={{ ...S.td, color: "#6E6E73", fontSize: 10 }}>{p.phase}</td><td style={{ ...S.td, fontFamily: "'JetBrains Mono',monospace", fontSize: 10, color: "#6E6E73" }}>{fmt(p.inicio || p.abertura)}</td><td style={{ ...S.td, fontFamily: "'JetBrains Mono',monospace", fontSize: 10, color: p.previsaoFinal && isOv(p.previsaoFinal) ? "#E8363C" : "#6E6E73" }}>{fmt(p.reprogramado || p.previsaoFinal)}</td><td style={{ ...S.td, fontFamily: "'JetBrains Mono',monospace", fontSize: 10, fontWeight: 600, color: (() => { const t = p.reprogramado || p.previsaoFinal; if (!t || p.phase === "Concluído") return "#6E6E73"; const d = daysTo(t); return d < 0 ? "#E8363C" : "#34C759"; })() }}>{(() => { const t = p.reprogramado || p.previsaoFinal; if (!t || p.phase === "Concluído") return "—"; const d = daysTo(t); return d < 0 ? Math.abs(d) + "d" : "0d"; })()}</td><td style={S.td}>{(p.actions || []).length}{ov > 0 && <span style={{ color: "#E8363C", fontSize: 9, marginLeft: 2 }}>⚠{ov}</span>}</td></tr>); })}</tbody></table></div></div>}
+
+      {/* DETAIL */}
+      {view === "projects" && selProj && cp && <div>
+        <button onClick={() => setSelProj(null)} style={{ fontFamily: "inherit", background: "none", border: "none", color: "#007AFF", fontSize: 12, cursor: "pointer", padding: 0, marginBottom: 8, fontWeight: 600 }}>← Voltar</button>
+        <div style={{ ...S.card, marginBottom: 12 }}><div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}><div style={{ flex: 1 }}><div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}><h2 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>{cp.name}</h2><Badge status={cp.status} /></div><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(110px,1fr))", gap: 10 }}>{[{ l: "Área", v: cp.area }, { l: "Fase", v: cp.phase }, { l: "Tipo", v: cp.tipo || "—" }, { l: "Origem", v: cp.origem || "—" }, { l: "Resp.", v: un(cp.owner) }, { l: "Abertura", v: fmt(cp.abertura) }, { l: "Início", v: fmt(cp.inicio) }, { l: "Previsão Inicial", v: fmt(cp.previsaoFinal), c: cp.previsaoFinal && isOv(cp.previsaoFinal) ? "#E8363C" : null }, { l: "Reprog.", v: fmt(cp.reprogramado), c: cp.reprogramado ? "#FF9500" : "#D1D1D6" }, { l: "Desvio", v: (() => { const t = cp.reprogramado || cp.previsaoFinal; if (!t || cp.phase === "Concluído") return "—"; const d = daysTo(t); return d < 0 ? Math.abs(d) + " dias" : "0 dias"; })(), c: (() => { const t = cp.reprogramado || cp.previsaoFinal; if (!t) return null; const d = daysTo(t); return d < 0 ? "#E8363C" : "#34C759"; })() }, { l: "Atualiz.", v: fmt(cp.dataAtualizacao) }].map((f, i) => (<div key={i}><div style={S.lbl}>{f.l}</div><div style={{ fontSize: 13, fontWeight: 600, color: f.c || "#1D1D1F" }}>{f.v || "—"}</div></div>))}</div>
+                {(cp.possuiTAP || cp.possuiCronograma || cp.estaNoProject || cp.documentacao) && <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                  {cp.possuiTAP === "Sim" && <span style={{ fontSize: 9, background: "#34C75918", color: "#28A745", padding: "2px 8px", borderRadius: 6, fontWeight: 600 }}>✓ TAP</span>}
+                  {cp.possuiCronograma === "Sim" && <span style={{ fontSize: 9, background: "#007AFF18", color: "#007AFF", padding: "2px 8px", borderRadius: 6, fontWeight: 600 }}>✓ Cronograma</span>}
+                  {cp.estaNoProject === "Sim" && <span style={{ fontSize: 9, background: "#AF52DE18", color: "#AF52DE", padding: "2px 8px", borderRadius: 6, fontWeight: 600 }}>✓ Project</span>}
+                  {cp.documentacao === "Sim" && <span style={{ fontSize: 9, background: "#FF950018", color: "#FF9500", padding: "2px 8px", borderRadius: 6, fontWeight: 600 }}>✓ Documentação</span>}
+                </div>}{cp.obs && <div style={{ marginTop: 10, padding: 8, background: "#F9F9F9", borderRadius: 8, fontSize: 12, color: "#6E6E73" }}><strong style={{ color: "#AEAEB2", fontSize: 10 }}>OBS: </strong>{cp.obs}</div>}</div><div style={{ display: "flex", gap: 4 }}><button onClick={() => { setEditP(cp); setShowPF(true); }} style={{ fontFamily: "inherit", fontSize: 10, background: "#F2F2F7", color: "#6E6E73", border: "none", borderRadius: 6, padding: "6px 10px", cursor: "pointer" }}>✎</button><button onClick={() => delProj(cp.id)} style={{ fontFamily: "inherit", fontSize: 10, background: "#FF3B3012", color: "#E8363C", border: "none", borderRadius: 6, padding: "6px 10px", cursor: "pointer" }}>✕</button></div></div></div>
+        {showPF && <FP proj={editP} users={U} onSave={saveProj} onCancel={() => { setShowPF(false); setEditP(null); }} />}
+        <div style={{ display: "flex", gap: 3, marginBottom: 10, flexWrap: "wrap" }}>{[{ k: "acoes", l: `Ações (${(cp.actions || []).length})` }, { k: "atualizacoes", l: `Atualizações (${(cp.updates || []).length})` }].map(t => (<button key={t.k} onClick={() => setDtab(t.k)} style={{ fontFamily: "inherit", fontSize: 11, fontWeight: 600, background: dtab === t.k ? "#007AFF" : "#fff", color: dtab === t.k ? "#fff" : "#86868B", border: "1px solid " + (dtab === t.k ? "#007AFF" : "#E5E5EA"), borderRadius: 18, padding: "5px 14px", cursor: "pointer" }}>{t.l}</button>))}{dtab === "acoes" && <button onClick={() => { setEditA(null); setShowAF(true); }} style={{ ...S.btn, fontSize: 10, padding: "5px 12px", marginLeft: "auto" }}>+ Manual</button>}</div>
+        {dtab === "acoes" && <>{showAF && <FA action={editA} users={U} onSave={saveAct} onCancel={() => { setShowAF(false); setEditA(null); }} />}{(cp.actions || []).map((a, idx) => { const ov = isOv(a.dueDate) && a.status !== "Concluída" && a.status !== "Cancelada", done = a.status === "Concluída"; return (<div key={a.id} style={{ ...S.card, borderLeft: `3px solid ${ov ? "#E8363C" : done ? "#34C759" : "#E5E5EA"}`, marginBottom: 5, borderRadius: "3px 12px 12px 3px" }}><div style={{ display: "flex", justifyContent: "space-between", gap: 6, flexWrap: "wrap" }}><div style={{ flex: 1 }}><div style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, color: "#AEAEB2", fontWeight: 700 }}>{idx + 1}.</span><span style={{ fontSize: 12, fontWeight: 600, color: done ? "#AEAEB2" : "#1D1D1F", textDecoration: done ? "line-through" : "none" }}>{a.title}</span></div>{a.description && <div style={{ fontSize: 10, color: "#86868B", marginTop: 1, marginLeft: 20 }}>{a.description}</div>}</div><div style={{ display: "flex", gap: 2, alignItems: "center" }}><select value={a.status} onChange={e => updSt(selProj, a.id, e.target.value)} style={{ fontFamily: "inherit", fontSize: 9, background: "#F2F2F7", color: "#6E6E73", border: "1px solid #E5E5EA", borderRadius: 5, padding: "2px 4px", cursor: "pointer" }}>{ACTST.map(x => <option key={x}>{x}</option>)}</select><button onClick={() => { setEditA(a); setShowAF(true); }} style={{ background: "none", border: "none", color: "#86868B", fontSize: 12, cursor: "pointer" }}>✎</button><button onClick={() => delAct(a.id)} style={{ background: "none", border: "none", color: "#E8363C88", fontSize: 12, cursor: "pointer" }}>✕</button></div></div><div style={{ display: "flex", gap: 8, marginTop: 3, marginLeft: 20, flexWrap: "wrap" }}><span style={{ fontSize: 9, color: "#86868B", display: "flex", alignItems: "center", gap: 3 }}><span style={{ width: 5, height: 5, borderRadius: "50%", background: uc(a.assignee) }} />{un(a.assignee)}</span>{a.dueDate && <span style={{ fontSize: 9, fontFamily: "'JetBrains Mono',monospace", color: ov ? "#E8363C" : "#AEAEB2" }}>{ov ? "⚠ " : ""}Prazo: {fmt(a.dueDate)}</span>}{a.createdBy && <span style={{ fontSize: 8, color: "#AEAEB2", background: "#F2F2F7", padding: "1px 6px", borderRadius: 4 }}>Criado por {un(a.createdBy)}{a.createdAt ? ` em ${fmt(a.createdAt)}` : ""}</span>}{a.lastModBy && <span style={{ fontSize: 8, color: "#007AFF", background: "#F0F9FF", padding: "1px 6px", borderRadius: 4 }}>Alterado por {un(a.lastModBy)}{a.lastModAt ? ` em ${fmtFull(a.lastModAt)}` : ""}</span>}</div></div>); })}</>}
+        {/* ATUALIZAÇÕES */}
+        {dtab === "atualizacoes" && <UpdatesTab project={cp} userId={user.id} un={un} uc={uc} onAddUpdate={(upd) => {
+          save({ ...data, projects: P.map(p => p.id === selProj ? { ...p, updates: [...(p.updates || []), { ...upd, id: gid(), userId: user.id, timestamp: new Date().toISOString() }], dataAtualizacao: today() } : p) });
+          flash("Atualização registrada!");
+        }} onDeleteUpdate={(updId) => {
+          save({ ...data, projects: P.map(p => p.id === selProj ? { ...p, updates: (p.updates || []).filter(u => u.id !== updId) } : p) });
+        }} />}
+
+      </div>}
+
+      {/* MY ACTIONS */}
+      {view === "myactions" && <div><h2 style={S.h2}>Minhas Ações</h2>{myAct.length === 0 ? <div style={{ ...S.card, textAlign: "center", color: "#AEAEB2", padding: 24 }}>🎉</div> : myAct.sort((a, b) => { if (!a.dueDate) return 1; if (!b.dueDate) return -1; return a.dueDate.localeCompare(b.dueDate); }).map(a => { const ov = isOv(a.dueDate); return (<div key={a.id} style={{ ...S.card, borderLeft: `3px solid ${ov ? "#E8363C" : "#E5E5EA"}`, marginBottom: 5, borderRadius: "3px 12px 12px 3px", cursor: "pointer" }} onClick={() => { setSelProj(a.pId); setView("projects"); setDtab("acoes"); }}><div style={{ display: "flex", justifyContent: "space-between", gap: 6, flexWrap: "wrap" }}><div><div style={{ fontSize: 12, fontWeight: 600 }}>{a.title}</div><div style={{ fontSize: 10, color: "#86868B", marginTop: 1 }}>{a.pName}</div></div><Badge status={ov ? "Atrasado" : "Em risco"} /></div>{a.dueDate && <div style={{ fontSize: 9, fontFamily: "'JetBrains Mono',monospace", color: ov ? "#E8363C" : "#86868B", marginTop: 3 }}>{ov ? "⚠ " : ""}Prazo: {fmt(a.dueDate)}</div>}</div>); })}</div>}
+
+      {/* ===== AUTOMAÇÃO ===== */}
+      {view === "automation" && <AutomationTab alerts={alerts} projects={P} users={U} onSaveAlerts={a => save({ ...data, alerts: a })} genOverdueEmail={genOverdueEmail} genUpcomingEmail={genUpcomingEmail} genWeeklyEmail={genWeeklyEmail} genStaleEmail={genStaleEmail} openMailto={openMailto} flash={flash} />}
+
+      {/* CONFIG */}
+      {view === "settings" && <Cfg users={U} audit={audit} onSave={uu => { const changes = uu.filter((u, i) => U[i] && u.name !== U[i].name).map(u => u.name); if (changes.length) addAudit("rename", `Nomes alterados: ${changes.join(", ")}`); save({ ...data, users: uu }); const me = uu.find(u => u.id === user.id); if (me) setUser(me); flash("OK!"); }} onAddUser={nu => { const nd = { ...data, users: [...U, nu], auditLog: [...audit, { id: gid(), action: "add_user", detail: `Usuário "${nu.name}" criado`, userId: user.id, timestamp: new Date().toISOString() }] }; save(nd); flash("Usuário adicionado!"); }} onRemoveUser={uid => { const removed = U.find(u => u.id === uid); const nd = { ...data, users: U.filter(u => u.id !== uid), auditLog: [...audit, { id: gid(), action: "remove_user", detail: `Usuário "${removed?.name}" removido`, userId: user.id, timestamp: new Date().toISOString() }] }; save(nd); flash("Removido", "w"); }} onUpdatePassword={(uid, pw) => { const nd = { ...data, users: U.map(u => u.id === uid ? { ...u, password: pw || undefined } : u), auditLog: [...audit, { id: gid(), action: "password", detail: `Senha ${pw ? "definida" : "removida"} para "${un(uid)}"`, userId: user.id, timestamp: new Date().toISOString() }] }; save(nd); if (uid === user.id) setUser({ ...user, password: pw || undefined }); flash(pw ? "Senha definida!" : "Senha removida!"); }} onReset={() => { if (confirm("Restaurar?")) { save(initData); flash("OK", "w"); } }} />}
+    </main>
+  </div>);
+}
+
+/* ===== AUTOMATION TAB ===== */
+function AutomationTab({ alerts, projects, users, onSaveAlerts, genOverdueEmail, genUpcomingEmail, genWeeklyEmail, genStaleEmail, openMailto, flash }) {
+  const [editIdx, setEditIdx] = useState(null);
+  const [form, setForm] = useState({ type: "overdue", emails: "", days: 7, active: true, description: "" });
+  const [showForm, setShowForm] = useState(false);
+  const [aiText, setAiText] = useState("");
+  const [aiStep, setAiStep] = useState("idle"); // idle, processing, done
+  const [aiResult, setAiResult] = useState(null);
+
+  const startEdit = (idx) => { setForm({ ...alerts[idx] }); setEditIdx(idx); setShowForm(true); };
+  const saveForm = () => {
+    if (!form.emails.trim()) return;
+    let na = [...alerts];
+    if (editIdx !== null) na[editIdx] = form; else na.push({ ...form, id: gid(), createdAt: today() });
+    onSaveAlerts(na); setShowForm(false); setEditIdx(null); flash("Alerta salvo!");
+  };
+  const delAlert = idx => { onSaveAlerts(alerts.filter((_, i) => i !== idx)); flash("Removido", "w"); };
+  const toggleAlert = idx => { const na = [...alerts]; na[idx] = { ...na[idx], active: !na[idx].active }; onSaveAlerts(na); };
+
+  const fireAlert = (alert) => {
+    let emailData;
+    switch (alert.type) {
+      case "overdue": emailData = genOverdueEmail(); break;
+      case "upcoming": emailData = genUpcomingEmail(alert.days || 7); break;
+      case "weekly": emailData = genWeeklyEmail(); break;
+      case "stale": emailData = genStaleEmail(alert.days || 14); break;
+      case "custom": emailData = genCustomEmail(alert); break;
+    }
+    openMailto(alert.emails, emailData);
+  };
+
+  const genCustomEmail = (alert) => {
+    const items = [];
+    if (alert.triggerType === "upcoming_per_user") {
+      projects.forEach(p => { (p.actions || []).filter(a => { const d = daysTo(a.dueDate); return d !== null && d >= 0 && d <= (alert.days || 3) && a.status !== "Concluída" && a.status !== "Cancelada"; }).forEach(a => {
+        const u = users.find(x => x.id === a.assignee);
+        items.push(`• ${p.name}: "${a.title}" — Vence ${fmt(a.dueDate)} — Resp: ${u?.name || "?"} (${u?.email || "sem email"})`);
+      }); });
+    } else if (alert.triggerType === "overdue_per_user") {
+      projects.forEach(p => { (p.actions || []).filter(a => isOv(a.dueDate) && a.status !== "Concluída" && a.status !== "Cancelada").forEach(a => {
+        const u = users.find(x => x.id === a.assignee);
+        items.push(`• ${p.name}: "${a.title}" — Venceu ${fmt(a.dueDate)} — Resp: ${u?.name || "?"}`);
+      }); });
+    }
+    if (!items.length) return null;
+    return { subject: alert.emailSubject || `Alerta Projetos Policontrol — ${fmt(today())}`, body: `${alert.description || "Alerta automático"}:\n\n${items.join("\n")}\n\nAcesse o app para atualizar.` };
+  };
+
+  const typeInfo = id => ALERT_TYPES.find(t => t.id === id) || { icon: "⚡", label: id || "Personalizado", desc: "" };
+
+  const getCount = (type, days) => {
+    switch (type) {
+      case "overdue": return projects.reduce((s, p) => s + (p.actions || []).filter(a => isOv(a.dueDate) && a.status !== "Concluída" && a.status !== "Cancelada").length, 0);
+      case "upcoming": return projects.reduce((s, p) => s + (p.actions || []).filter(a => { const d = daysTo(a.dueDate); return d !== null && d >= 0 && d <= (days || 7) && a.status !== "Concluída" && a.status !== "Cancelada"; }).length, 0);
+      case "weekly": return projects.filter(p => p.phase !== "Concluído").length;
+      case "stale": return projects.filter(p => { if (!p.dataAtualizacao || p.phase === "Concluído") return false; const d = daysTo(p.dataAtualizacao); return d !== null && Math.abs(d) >= (days || 14); }).length;
+      case "custom": return projects.reduce((s, p) => s + (p.actions || []).filter(a => { const d = daysTo(a.dueDate); return d !== null && d >= 0 && d <= (days || 3) && a.status !== "Concluída" && a.status !== "Cancelada"; }).length, 0);
+      default: return 0;
+    }
+  };
+
+  /* AI processing */
+  const usersCtx = users.map(u => `"${u.name}" (email: ${u.email || "não cadastrado"}, whatsapp: ${u.phone || "não cadastrado"})`).join(", ");
+  const processAI = async () => {
+    if (!aiText.trim()) return;
+    setAiStep("processing");
+    try {
+      const sysPrompt = `Você é um assistente que cria regras de automação para um app de projetos. Interprete o pedido do usuário e retorne APENAS JSON puro (sem backticks).
+
+USUÁRIOS CADASTRADOS: ${usersCtx}
+
+TIPOS DE ALERTA DISPONÍVEIS:
+- "overdue": ações atrasadas (já venceram)
+- "upcoming": prazos se aproximando (X dias antes)  
+- "weekly": resumo semanal de todos os projetos
+- "stale": projetos sem atualização há X dias
+- "custom": regra personalizada
+
+REGRAS:
+1. Identifique o tipo de alerta mais adequado
+2. Se o usuário pedir "mandar para o responsável", use os emails dos usuários cadastrados. Se disse "para todos", junte todos os emails.
+3. Se mencionou dias (ex: "3 dias antes"), use no campo days
+4. description = resumo legível do que o alerta faz
+5. Se pediu algo para responsável individual, use triggerType: "upcoming_per_user" ou "overdue_per_user"
+
+JSON:
+{"type":"upcoming","days":3,"emails":"emails separados por vírgula","description":"Descrição legível do alerta","triggerType":"upcoming_per_user","emailSubject":"Assunto do email sugerido"}
+
+Se não entender: {"error":"mensagem"}`;
+      const raw = await callAI(sysPrompt, aiText);
+      const parsed = JSON.parse(raw);
+      if (parsed.error) { flash(parsed.error, "err"); setAiStep("idle"); return; }
+      setAiResult(parsed); setAiStep("done");
+    } catch (e) { flash("Erro: " + e.message, "err"); setAiStep("idle"); }
+  };
+
+  const applyAI = () => {
+    if (!aiResult) return;
+    const newAlert = { id: gid(), type: aiResult.type || "custom", days: aiResult.days || 7, emails: aiResult.emails || "", description: aiResult.description || aiText, triggerType: aiResult.triggerType || null, emailSubject: aiResult.emailSubject || "", active: true, createdAt: today(), createdByAI: true };
+    onSaveAlerts([...alerts, newAlert]);
+    setAiText(""); setAiResult(null); setAiStep("idle");
+    flash("Alerta criado pela IA!");
+  };
+
+  return (<div>
+    <h2 style={S.h2}>⚡ Automação de Alertas</h2>
+
+    {/* AI INPUT */}
+    <div style={{ ...S.card, marginBottom: 14, border: "1px solid #AF52DE33", background: "#FAF5FF" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+        <span style={{ fontSize: 18 }}>✨</span>
+        <span style={{ fontSize: 14, fontWeight: 700, color: "#AF52DE" }}>Criar alerta com IA</span>
+      </div>
+      <p style={{ fontSize: 12, color: "#86868B", marginBottom: 10, lineHeight: 1.5 }}>Descreva o que precisa e a IA cria o alerta automaticamente.</p>
+
+      {aiStep === "idle" && <>
+        <textarea value={aiText} onChange={e => setAiText(e.target.value)} placeholder='Ex: "Quando uma ação estiver a 3 dias de vencer, manda email pro responsável"' style={{ ...S.inp, minHeight: 60, resize: "vertical", fontSize: 13, lineHeight: 1.5, marginBottom: 8 }} />
+        <div style={{ display: "flex", gap: 6, fontSize: 11, color: "#AEAEB2", marginBottom: 10, flexWrap: "wrap" }}>
+          {["Aviso 3 dias antes do prazo para o responsável", "Resumo semanal para toda equipe", "Alerta de ações atrasadas para gestores", "Projetos parados há 15 dias"].map(ex => (
+            <button key={ex} onClick={() => setAiText(ex)} style={{ fontFamily: "inherit", fontSize: 10, background: "#fff", color: "#6E6E73", border: "1px solid #E5E5EA", borderRadius: 20, padding: "4px 10px", cursor: "pointer" }}>{ex}</button>
+          ))}
+        </div>
+        <button onClick={processAI} disabled={!aiText.trim()} style={{ ...S.btn, width: "100%", padding: 12, fontSize: 13, borderRadius: 10, background: "#AF52DE", opacity: aiText.trim() ? 1 : .4 }}>Criar alerta com IA ✨</button>
+      </>}
+
+      {aiStep === "processing" && <div style={{ textAlign: "center", padding: 20 }}><div style={{ width: 30, height: 30, border: "3px solid #E5E5EA", borderTopColor: "#AF52DE", borderRadius: "50%", animation: "spin .7s linear infinite", margin: "0 auto" }} /><p style={{ color: "#86868B", marginTop: 10, fontSize: 12 }}>Interpretando...</p></div>}
+
+      {aiStep === "done" && aiResult && <div>
+        <div style={{ background: "#fff", border: "1px solid #AF52DE22", borderRadius: 10, padding: 12, marginBottom: 10 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#AF52DE", marginBottom: 6 }}>✓ Alerta interpretado</div>
+          <div style={{ fontSize: 13, color: "#1D1D1F", marginBottom: 6, lineHeight: 1.5 }}>{aiResult.description}</div>
+          <div style={{ fontSize: 11, color: "#86868B" }}>Tipo: <strong>{typeInfo(aiResult.type).label}</strong></div>
+          {aiResult.days && <div style={{ fontSize: 11, color: "#86868B" }}>Antecedência: <strong>{aiResult.days} dias</strong></div>}
+          <div style={{ fontSize: 11, color: "#86868B" }}>Destinatários: <strong>{aiResult.emails || "não identificado"}</strong></div>
+          {aiResult.emailSubject && <div style={{ fontSize: 11, color: "#86868B" }}>Assunto: <strong>{aiResult.emailSubject}</strong></div>}
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => { setAiStep("idle"); setAiResult(null); }} style={{ fontFamily: "inherit", flex: 1, fontSize: 12, background: "#F2F2F7", color: "#6E6E73", border: "none", borderRadius: 10, padding: 10, cursor: "pointer" }}>✏ Refazer</button>
+          <button onClick={applyAI} style={{ ...S.btn, flex: 1, padding: 10, fontSize: 12, borderRadius: 10, background: "#AF52DE" }}>✅ Criar Alerta</button>
+        </div>
+      </div>}
+    </div>
+
+    {/* MANUAL ADD */}
+    <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+      <button onClick={() => { setForm({ type: "overdue", emails: "", days: 7, active: true, description: "" }); setEditIdx(null); setShowForm(!showForm); }} style={{ fontFamily: "inherit", fontSize: 10, background: "#F2F2F7", color: "#86868B", border: "none", borderRadius: 6, padding: "5px 10px", cursor: "pointer" }}>{showForm ? "Cancelar" : "+ Manual"}</button>
+    </div>
+
+    {showForm && <div style={{ ...S.card, marginBottom: 14, border: "1px solid #007AFF33" }}>
+      <h3 style={{ fontSize: 13, fontWeight: 700, marginTop: 0, marginBottom: 10 }}>{editIdx !== null ? "Editar" : "Novo"} Alerta Manual</h3>
+      <div style={{ marginBottom: 8 }}>
+        <label style={S.lbl}>Tipo</label>
+        <select style={S.inp} value={form.type} onChange={e => setForm({ ...form, type: e.target.value })}>
+          {ALERT_TYPES.map(t => <option key={t.id} value={t.id}>{t.icon} {t.label}</option>)}
+        </select>
+      </div>
+      {(form.type === "upcoming" || form.type === "stale") && <div style={{ marginBottom: 8 }}><label style={S.lbl}>Dias</label><input type="number" min="1" max="90" value={form.days} onChange={e => setForm({ ...form, days: parseInt(e.target.value) || 7 })} style={{ ...S.inp, width: 80 }} /></div>}
+      <div style={{ marginBottom: 8 }}><label style={S.lbl}>Emails (vírgula)</label><input value={form.emails} onChange={e => setForm({ ...form, emails: e.target.value })} placeholder="email@empresa.com" style={S.inp} /></div>
+      <div style={{ marginBottom: 8 }}><label style={S.lbl}>Descrição</label><input value={form.description || ""} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="O que este alerta faz" style={S.inp} /></div>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
+        <button onClick={() => setShowForm(false)} style={{ fontFamily: "inherit", fontSize: 11, background: "#F2F2F7", color: "#86868B", border: "none", borderRadius: 8, padding: "7px 14px", cursor: "pointer" }}>Cancelar</button>
+        <button onClick={saveForm} disabled={!form.emails.trim()} style={{ ...S.btn, opacity: form.emails.trim() ? 1 : .4 }}>Salvar</button>
+      </div>
+    </div>}
+
+    {/* ALERTS LIST */}
+    {alerts.length === 0 && <div style={{ ...S.card, textAlign: "center", color: "#AEAEB2", padding: 24, fontSize: 12 }}>Nenhum alerta. Use a IA acima para criar!</div>}
+
+    {alerts.map((a, idx) => {
+      const info = a.description ? { icon: a.createdByAI ? "✨" : "⚡", label: a.description } : typeInfo(a.type);
+      const count = getCount(a.type, a.days);
+      return (<div key={a.id || idx} style={{ ...S.card, marginBottom: 8, opacity: a.active ? 1 : .5, borderLeft: `3px solid ${a.active ? (a.createdByAI ? "#AF52DE" : "#007AFF") : "#D1D1D6"}`, borderRadius: "3px 12px 12px 3px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, flexWrap: "wrap" }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+              <span style={{ fontSize: 14 }}>{typeof info.icon === "string" ? info.icon : "⚡"}</span>
+              <span style={{ fontSize: 12, fontWeight: 700 }}>{info.label || info.desc || a.type}</span>
+              {a.createdByAI && <span style={{ fontSize: 8, background: "#AF52DE18", color: "#AF52DE", padding: "1px 6px", borderRadius: 4, fontWeight: 600 }}>IA</span>}
+              {!a.active && <span style={{ fontSize: 8, color: "#AEAEB2", background: "#F2F2F7", padding: "1px 6px", borderRadius: 4 }}>Pausado</span>}
+            </div>
+            <div style={{ fontSize: 10, color: "#86868B" }}>Para: {a.emails}</div>
+            {a.days && <div style={{ fontSize: 10, color: "#86868B" }}>{a.type === "stale" ? `${a.days}d sem atualização` : `${a.days}d antecedência`}</div>}
+            <div style={{ fontSize: 10, color: count > 0 ? "#E8363C" : "#34C759", fontWeight: 600, marginTop: 3 }}>{count > 0 ? `${count} item(ns) agora` : "✓ Nada pendente"}</div>
+          </div>
+          <div style={{ display: "flex", gap: 4, flexDirection: "column", alignItems: "flex-end" }}>
+            <button onClick={() => fireAlert(a)} disabled={count === 0} style={{ fontFamily: "inherit", fontSize: 10, fontWeight: 600, background: count > 0 ? "#007AFF" : "#E5E5EA", color: count > 0 ? "#fff" : "#AEAEB2", border: "none", borderRadius: 8, padding: "6px 12px", cursor: count > 0 ? "pointer" : "default" }}>📧 Disparar</button>
+            <div style={{ display: "flex", gap: 3 }}>
+              <button onClick={() => toggleAlert(idx)} style={{ fontFamily: "inherit", fontSize: 9, background: "#F2F2F7", color: "#86868B", border: "none", borderRadius: 6, padding: "3px 7px", cursor: "pointer" }}>{a.active ? "Pausar" : "Ativar"}</button>
+              <button onClick={() => startEdit(idx)} style={{ fontFamily: "inherit", fontSize: 9, background: "#F2F2F7", color: "#86868B", border: "none", borderRadius: 6, padding: "3px 7px", cursor: "pointer" }}>✎</button>
+              <button onClick={() => delAlert(idx)} style={{ fontFamily: "inherit", fontSize: 9, background: "#FF3B3012", color: "#E8363C", border: "none", borderRadius: 6, padding: "3px 7px", cursor: "pointer" }}>✕</button>
+            </div>
+          </div>
+        </div>
+      </div>);
+    })}
+  </div>);
+}
+
+/* ===== UPDATES TAB (drag & drop images) ===== */
+function UpdatesTab({ project, userId, un, uc, onAddUpdate, onDeleteUpdate }) {
+  const [text, setText] = useState("");
+  const [date, setDate] = useState(today());
+  const [images, setImages] = useState([]);
+  const [dragging, setDragging] = useState(false);
+  const fileRef = useRef();
+  const dropRef = useRef();
+
+  const processFiles = (files) => {
+    [...files].forEach(f => {
+      if (!f.type.startsWith("image/")) return;
+      const reader = new FileReader();
+      reader.onload = ev => setImages(prev => [...prev, { name: f.name, data: ev.target.result }]);
+      reader.readAsDataURL(f);
+    });
+  };
+
+  const handleDrop = (e) => { e.preventDefault(); setDragging(false); processFiles(e.dataTransfer.files); };
+  const handleDragOver = (e) => { e.preventDefault(); setDragging(true); };
+  const handleDragLeave = () => setDragging(false);
+  const handleFileInput = (e) => { processFiles(e.target.files); e.target.value = ""; };
+
+  const submit = () => {
+    if (!text.trim() && !images.length) return;
+    onAddUpdate({ text: text.trim(), images, manualPost: true, date });
+    setText(""); setImages([]); setDate(today());
+  };
+
+  const updates = [...(project.updates || [])].reverse();
+
+  return (<div>
+    {/* Post box */}
+    <div style={{ ...S.card, marginBottom: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
+        <span style={{ width: 10, height: 10, borderRadius: "50%", background: uc(userId) }} />
+        <span style={{ fontSize: 12, fontWeight: 600 }}>{un(userId)}</span>
+        <span style={{ fontSize: 10, color: "#AEAEB2" }}>· Nova atualização</span>
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 8 }}>
+        <textarea value={text} onChange={e => setText(e.target.value)} placeholder="Escreva uma atualização sobre o projeto..." style={{ ...S.inp, minHeight: 70, resize: "vertical", fontSize: 14, lineHeight: 1.5, flex: 1 }} />
+        <MicBtn onResult={t => setText(t)} sz={44} />
+      </div>
+      <div style={{ marginBottom: 8 }}>
+        <label style={S.lbl}>Data da atualização</label>
+        <input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ ...S.inp, width: 160 }} />
+      </div>
+
+      {/* Drop zone */}
+      <div ref={dropRef} onDrop={handleDrop} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onClick={() => fileRef.current?.click()}
+        style={{ border: `2px dashed ${dragging ? "#007AFF" : "#E5E5EA"}`, borderRadius: 10, padding: images.length ? "8px" : "20px 14px", textAlign: "center", cursor: "pointer", background: dragging ? "#F0F9FF" : "#FAFAFA", transition: "all .2s", marginBottom: 8 }}>
+        <input ref={fileRef} type="file" multiple accept="image/*" onChange={handleFileInput} style={{ display: "none" }} />
+        {images.length === 0 ? (
+          <div>
+            <div style={{ fontSize: 24, marginBottom: 4 }}>📷</div>
+            <div style={{ fontSize: 12, color: "#86868B" }}>Arraste fotos aqui ou toque para selecionar</div>
+            <div style={{ fontSize: 10, color: "#AEAEB2", marginTop: 2 }}>JPG, PNG, HEIC</div>
+          </div>
+        ) : (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {images.map((img, i) => (
+              <div key={i} style={{ position: "relative" }}>
+                <img src={img.data} alt={img.name} style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 8, border: "1px solid #E5E5EA" }} />
+                <button onClick={(e) => { e.stopPropagation(); setImages(images.filter((_, j) => j !== i)); }}
+                  style={{ position: "absolute", top: -5, right: -5, background: "#E8363C", color: "#fff", border: "none", borderRadius: 10, width: 18, height: 18, fontSize: 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
+              </div>
+            ))}
+            <div style={{ width: 72, height: 72, background: "#F2F2F7", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, color: "#AEAEB2" }}>+</div>
+          </div>
+        )}
+      </div>
+
+      <button onClick={submit} disabled={!text.trim() && !images.length} style={{ ...S.btn, width: "100%", padding: 12, fontSize: 13, borderRadius: 10, opacity: (text.trim() || images.length) ? 1 : .4 }}>Publicar Atualização</button>
+    </div>
+
+    {/* Feed */}
+    {updates.length === 0 ? <div style={{ ...S.card, textAlign: "center", color: "#AEAEB2", padding: 24, fontSize: 12 }}>Sem atualizações ainda. Publique a primeira!</div> :
+      updates.map(u => (
+        <div key={u.id} style={{ ...S.card, marginBottom: 8 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ width: 10, height: 10, borderRadius: "50%", background: uc(u.userId) }} />
+              <span style={{ fontSize: 13, fontWeight: 600 }}>{u.fromTelegram ? (u.telegramUser || "Telegram") : un(u.userId)}</span>
+              <span style={{ fontSize: 10, color: "#AEAEB2", fontFamily: "'JetBrains Mono',monospace" }}>{u.date ? fmt(u.date) : fmtFull(u.timestamp)}</span>
+              {!u.manualPost && <span style={{ fontSize: 8, background: "#AF52DE18", color: "#AF52DE", padding: "1px 6px", borderRadius: 4, fontWeight: 600 }}>via IA</span>}
+              {u.fromTelegram && <span style={{ fontSize: 8, background: "#0088CC18", color: "#0088CC", padding: "1px 6px", borderRadius: 4, fontWeight: 600 }}>📱 via Telegram{u.telegramUser ? " — " + u.telegramUser : ""}</span>}
+              {u.fromTelegram && <span style={{ fontSize: 8, background: "#0088CC18", color: "#0088CC", padding: "1px 6px", borderRadius: 4, fontWeight: 600 }}>📱 via Telegram{u.telegramUser ? " · " + u.telegramUser : ""}</span>}
+            </div>
+            <button onClick={() => { if (confirm("Remover atualização?")) onDeleteUpdate(u.id); }} style={{ background: "none", border: "none", color: "#E8363C55", fontSize: 12, cursor: "pointer" }}>✕</button>
+          </div>
+          {u.text && <p style={{ fontSize: 13, color: "#1D1D1F", margin: "0 0 8px", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{u.text}</p>}
+          {u.images?.length > 0 && (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {u.images.map((img, i) => (
+                <img key={i} src={img.data} alt={img.name} style={{ maxWidth: "100%", width: u.images.length === 1 ? "100%" : 160, height: u.images.length === 1 ? "auto" : 120, objectFit: "cover", borderRadius: 10, border: "1px solid #E5E5EA", cursor: "pointer" }}
+                  onClick={() => window.open(img.data, "_blank")} />
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+  </div>);
+}
+
+/* ===== SMART AI UPDATE ===== */
+function SmartUpdate({ projects, userId, onApply, onClose }) {
+  const [text, setText] = useState(""); const [step, setStep] = useState("input"); const [result, setResult] = useState(null); const [err, setErr] = useState("");
+  const projCtx = projects.map(p => `• "${p.name}" (id:${p.id}) — Ações: ${(p.actions || []).filter(a => a.status !== "Concluída").map(a => `[${a.id}] "${a.title}" (${a.status})`).join(", ") || "nenhuma"}`).join("\n");
+  const process = async () => { if (!text.trim()) return; setStep("processing"); setErr(""); try { const sysP = `Interprete atualização de projeto Policontrol. JSON puro sem backticks.\n\nPROJETOS:\n${projCtx}\n\nHOJE: ${today()}\n\nREGRAS:\n1. Identifique projeto pelo contexto\n2. Ações concluídas → completeActions (IDs)\n3. Novos passos → newActions\n4. summary = frase curta\n\nJSON: {"projectId":"","projectName":"","summary":"","completeActions":[],"newActions":[{"title":"","description":"","dueDate":""}],"newStatus":null,"newObs":null}\n\nSe não identificar: {"error":"msg"}`; const raw = await callAI(sysP, text); const parsed = JSON.parse(raw); if (parsed.error) { setErr(parsed.error); setStep("input"); return; } parsed.originalText = text; setResult(parsed); setStep("review"); } catch (e) { setErr("Erro: " + e.message); setStep("input"); } };
+  const proj = result ? projects.find(p => p.id === result.projectId) : null;
+  return (<div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", backdropFilter: "blur(8px)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 14 }} onClick={onClose}><div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 20, padding: 24, maxWidth: 480, width: "100%", maxHeight: "90vh", overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.15)" }}>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}><h3 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>🎤 Atualização Inteligente</h3><button onClick={onClose} style={{ fontFamily: "inherit", background: "#F2F2F7", border: "none", borderRadius: 16, width: 30, height: 30, cursor: "pointer", fontSize: 13, color: "#86868B" }}>✕</button></div>
+    {step === "input" && <><p style={{ fontSize: 13, color: "#86868B", marginBottom: 6, lineHeight: 1.5 }}>Fale ou digite livremente. A IA identifica o projeto e gerencia as ações.</p><p style={{ fontSize: 11, color: "#AEAEB2", marginBottom: 10, fontStyle: "italic" }}>Ex: "Já enviei placas pro Fiore, retorna até 15/04"</p><div style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 10 }}><textarea value={text} onChange={e => setText(e.target.value)} placeholder="Fale ou digite o que aconteceu..." style={{ ...S.inp, minHeight: 90, resize: "vertical", fontSize: 15, lineHeight: 1.5, flex: 1 }} /><MicBtn onResult={t => setText(t)} sz={52} /></div>{err && <p style={{ fontSize: 12, color: "#E8363C", marginBottom: 8 }}>{err}</p>}<button onClick={process} disabled={!text.trim()} style={{ ...S.btn, width: "100%", padding: 14, fontSize: 15, opacity: text.trim() ? 1 : .4, borderRadius: 12 }}>Processar com IA ✨</button></>}
+    {step === "processing" && <div style={{ textAlign: "center", padding: 40 }}><div style={{ width: 36, height: 36, border: "3px solid #E5E5EA", borderTopColor: "#007AFF", borderRadius: "50%", animation: "spin .7s linear infinite", margin: "0 auto" }} /><p style={{ color: "#86868B", marginTop: 14, fontSize: 14 }}>Interpretando...</p></div>}
+    {step === "review" && result && <><div style={{ background: "#F0F9FF", border: "1px solid #007AFF22", borderRadius: 12, padding: 14, marginBottom: 14 }}><div style={{ fontSize: 14, fontWeight: 700, color: "#007AFF", marginBottom: 8 }}>📋 {result.projectName}</div><div style={{ fontSize: 13, color: "#1D1D1F", marginBottom: 10, lineHeight: 1.5 }}>{result.summary}</div>{result.completeActions?.length > 0 && <div style={{ marginBottom: 10 }}><div style={{ fontSize: 11, fontWeight: 700, color: "#28A745", marginBottom: 4 }}>✅ Finalizadas:</div>{result.completeActions.map(aid => { const a = proj?.actions?.find(x => x.id === aid); return a ? <div key={aid} style={{ fontSize: 12, color: "#6E6E73", marginLeft: 8 }}>• <s>{a.title}</s> → Concluída</div> : null; })}</div>}{result.newActions?.length > 0 && <div style={{ marginBottom: 10 }}><div style={{ fontSize: 11, fontWeight: 700, color: "#007AFF", marginBottom: 4 }}>🆕 Novas ações:</div>{result.newActions.map((a, i) => <div key={i} style={{ fontSize: 12, color: "#1D1D1F", marginLeft: 8 }}>• <strong>{a.title}</strong>{a.dueDate ? ` — ${fmt(a.dueDate)}` : ""}</div>)}</div>}{result.newStatus && <div style={{ fontSize: 12, color: "#6E6E73" }}>Status → <strong>{result.newStatus}</strong></div>}</div><div style={{ display: "flex", gap: 8 }}><button onClick={() => { setStep("input"); setResult(null); }} style={{ fontFamily: "inherit", flex: 1, fontSize: 13, background: "#F2F2F7", color: "#6E6E73", border: "none", borderRadius: 10, padding: 12, cursor: "pointer" }}>✏ Corrigir</button><button onClick={() => onApply(result)} style={{ ...S.btn, flex: 1, padding: 12, fontSize: 13, borderRadius: 10 }}>✅ Aplicar</button></div></>}
+  </div></div>);
+}
+
+function FP({ proj, users, onSave, onCancel }) { const TIPOS=["Novo Produto","Melhoria","Redução de Custo","Serviço","Substituição de Componente",""]; const [f, sF] = useState({ name: proj?.name || "", area: proj?.area || AREAS[0], phase: proj?.phase || PHASES[0], status: proj?.status || "No prazo", owner: proj?.owner || users[0].id, tipo: proj?.tipo || "", origem: proj?.origem || "", abertura: proj?.abertura || "", inicio: proj?.inicio || "", previsaoFinal: proj?.previsaoFinal || "", reprogramado: proj?.reprogramado || "", possuiTAP: proj?.possuiTAP || "", possuiCronograma: proj?.possuiCronograma || "", estaNoProject: proj?.estaNoProject || "", documentacao: proj?.documentacao || "", obs: proj?.obs || "", dataAtualizacao: proj?.dataAtualizacao || today() }); return (<div style={{ ...S.card, marginBottom: 10 }}><h3 style={{ fontSize: 13, fontWeight: 700, marginTop: 0, marginBottom: 10 }}>{proj ? "Editar" : "Novo"} Projeto</h3><div style={{ marginBottom: 6 }}><label style={S.lbl}>Nome *</label><input style={S.inp} value={f.name} onChange={e => sF({ ...f, name: e.target.value })} /></div><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(110px,1fr))", gap: 5 }}><div><label style={S.lbl}>Área</label><select style={S.inp} value={f.area} onChange={e => sF({ ...f, area: e.target.value })}>{AREAS.map(a => <option key={a}>{a}</option>)}</select></div><div><label style={S.lbl}>Tipo</label><select style={S.inp} value={f.tipo} onChange={e => sF({ ...f, tipo: e.target.value })}>{TIPOS.map(t => <option key={t} value={t}>{t || "—"}</option>)}</select></div><div><label style={S.lbl}>Fase</label><select style={S.inp} value={f.phase} onChange={e => sF({ ...f, phase: e.target.value })}>{PHASES.map(p => <option key={p}>{p}</option>)}</select></div><div><label style={S.lbl}>Status</label><select style={S.inp} value={f.status} onChange={e => sF({ ...f, status: e.target.value })}>{Object.keys(ST).map(x => <option key={x}>{x}</option>)}</select></div><div><label style={S.lbl}>Resp.</label><select style={S.inp} value={f.owner} onChange={e => sF({ ...f, owner: e.target.value })}>{users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select></div><div><label style={S.lbl}>Origem</label><input style={S.inp} value={f.origem} onChange={e => sF({ ...f, origem: e.target.value })} /></div><div><label style={S.lbl}>Abertura</label><input type="date" style={S.inp} value={f.abertura} onChange={e => sF({ ...f, abertura: e.target.value })} /></div><div><label style={S.lbl}>Início</label><input type="date" style={S.inp} value={f.inicio} onChange={e => sF({ ...f, inicio: e.target.value })} /></div><div><label style={S.lbl}>Previsão Inicial</label><input type="date" style={S.inp} value={f.previsaoFinal} onChange={e => sF({ ...f, previsaoFinal: e.target.value })} /></div><div><label style={S.lbl}>Reprog.</label><input type="date" style={S.inp} value={f.reprogramado} onChange={e => sF({ ...f, reprogramado: e.target.value })} /></div></div><div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>{[["TAP","possuiTAP"],["Cronograma","possuiCronograma"],["Project","estaNoProject"],["Documentação","documentacao"]].map(([l,k])=>(<label key={k} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "#6E6E73", cursor: "pointer" }}><input type="checkbox" checked={f[k]==="Sim"} onChange={e=>sF({...f,[k]:e.target.checked?"Sim":""})} />{l}</label>))}</div><div style={{ marginTop: 5 }}><label style={S.lbl}>OBS</label><textarea style={{ ...S.inp, minHeight: 36, resize: "vertical" }} value={f.obs} onChange={e => sF({ ...f, obs: e.target.value })} /></div><div style={{ display: "flex", justifyContent: "flex-end", gap: 5, marginTop: 8 }}><button onClick={onCancel} style={{ fontFamily: "inherit", fontSize: 11, background: "#F2F2F7", color: "#86868B", border: "none", borderRadius: 8, padding: "7px 14px", cursor: "pointer" }}>Cancelar</button><button disabled={!f.name.trim()} onClick={() => onSave(f)} style={{ ...S.btn, opacity: f.name.trim() ? 1 : .4 }}>Salvar</button></div></div>); }
+function FA({ action, users, onSave, onCancel }) { const [f, sF] = useState({ title: action?.title || "", description: action?.description || "", assignee: action?.assignee || users[0].id, dueDate: action?.dueDate || "", status: action?.status || "Pendente" }); return (<div style={{ ...S.card, marginBottom: 10 }}><h3 style={{ fontSize: 13, fontWeight: 700, marginTop: 0, marginBottom: 10 }}>{action ? "Editar" : "Nova"} Ação</h3><div style={{ marginBottom: 6 }}><label style={S.lbl}>Título *</label><input style={S.inp} value={f.title} onChange={e => sF({ ...f, title: e.target.value })} /></div><div style={{ marginBottom: 6 }}><label style={S.lbl}>Descrição</label><textarea style={{ ...S.inp, minHeight: 36, resize: "vertical" }} value={f.description} onChange={e => sF({ ...f, description: e.target.value })} /></div><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(110px,1fr))", gap: 5 }}><div><label style={S.lbl}>Resp.</label><select style={S.inp} value={f.assignee} onChange={e => sF({ ...f, assignee: e.target.value })}>{users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select></div><div><label style={S.lbl}>Prazo</label><input type="date" style={S.inp} value={f.dueDate} onChange={e => sF({ ...f, dueDate: e.target.value })} /></div><div><label style={S.lbl}>Status</label><select style={S.inp} value={f.status} onChange={e => sF({ ...f, status: e.target.value })}>{ACTST.map(x => <option key={x}>{x}</option>)}</select></div></div><div style={{ display: "flex", justifyContent: "flex-end", gap: 5, marginTop: 8 }}><button onClick={onCancel} style={{ fontFamily: "inherit", fontSize: 11, background: "#F2F2F7", color: "#86868B", border: "none", borderRadius: 8, padding: "7px 14px", cursor: "pointer" }}>Cancelar</button><button disabled={!f.title.trim()} onClick={() => onSave(f)} style={{ ...S.btn, opacity: f.title.trim() ? 1 : .4 }}>Salvar</button></div></div>); }
+function Cfg({ users, audit, onSave, onAddUser, onRemoveUser, onUpdatePassword, onReset }) {
+  const [n, sN] = useState(users.map(u => u.name));
+  const [emails, setEmails] = useState(users.map(u => u.email || ""));
+  const [phones, setPhones] = useState(users.map(u => u.phone || ""));
+  const [showNew, setShowNew] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newEmail, setNewEmail] = useState("");
+  const [newPhone, setNewPhone] = useState("");
+  const [newPw, setNewPw] = useState("");
+  const COLORS = ["#007AFF","#34C759","#FF9500","#AF52DE","#FF2D55","#5856D6","#FF6B35","#00C7BE","#BF5AF2","#64D2FF"];
+  const [newColor, setNewColor] = useState(COLORS[users.length % COLORS.length]);
+  const [pwEditing, setPwEditing] = useState(null);
+  const [pwVal, setPwVal] = useState("");
+  const [showAudit, setShowAudit] = useState(false);
+  const [expanded, setExpanded] = useState(null);
+  useEffect(() => { sN(users.map(u => u.name)); setEmails(users.map(u => u.email || "")); setPhones(users.map(u => u.phone || "")); }, [users]);
+
+  const handleAdd = () => { if (!newName.trim()) return; onAddUser({ id: "u" + gid(), name: newName.trim(), email: newEmail.trim(), phone: newPhone.trim(), color: newColor, password: newPw || undefined }); setNewName(""); setNewEmail(""); setNewPhone(""); setNewPw(""); setShowNew(false); };
+  const un = id => (users.find(u => u.id === id) || {}).name || "—";
+
+  return (<div><h2 style={S.h2}>Config</h2>
+    {/* USERS */}
+    <div style={{ ...S.card, marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <h3 style={{ fontSize: 13, fontWeight: 700, margin: 0 }}>👥 Usuários ({users.length})</h3>
+        <button onClick={() => setShowNew(true)} style={{ ...S.btn, fontSize: 10, padding: "5px 12px" }}>+ Novo</button>
+      </div>
+
+      {showNew && <div style={{ background: "#F0F9FF", border: "1px solid #007AFF22", borderRadius: 10, padding: 12, marginBottom: 10 }}>
+        <div style={{ marginBottom: 6 }}><label style={S.lbl}>Nome *</label><input style={S.inp} value={newName} onChange={e => setNewName(e.target.value)} placeholder="Nome" /></div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 6 }}>
+          <div><label style={S.lbl}>📧 Email</label><input style={S.inp} value={newEmail} onChange={e => setNewEmail(e.target.value)} placeholder="email@empresa.com" /></div>
+          <div><label style={S.lbl}>📱 WhatsApp</label><input style={S.inp} value={newPhone} onChange={e => setNewPhone(e.target.value)} placeholder="+55 11 99999-0000" /></div>
+        </div>
+        <div style={{ marginBottom: 6 }}><label style={S.lbl}>Senha (opcional)</label><input type="password" style={S.inp} value={newPw} onChange={e => setNewPw(e.target.value)} placeholder="Deixe vazio para sem senha" /></div>
+        <div style={{ marginBottom: 8 }}><label style={S.lbl}>Cor</label><div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>{COLORS.map(c => <button key={c} onClick={() => setNewColor(c)} style={{ width: 24, height: 24, borderRadius: "50%", background: c, border: newColor === c ? "3px solid #1D1D1F" : "2px solid #E5E5EA", cursor: "pointer", padding: 0 }} />)}</div></div>
+        <div style={{ display: "flex", gap: 5, justifyContent: "flex-end" }}>
+          <button onClick={() => setShowNew(false)} style={{ fontFamily: "inherit", fontSize: 11, background: "#F2F2F7", color: "#86868B", border: "none", borderRadius: 8, padding: "6px 12px", cursor: "pointer" }}>Cancelar</button>
+          <button onClick={handleAdd} disabled={!newName.trim()} style={{ ...S.btn, fontSize: 11, opacity: newName.trim() ? 1 : .4 }}>Adicionar</button>
+        </div>
+      </div>}
+
+      {users.map((u, i) => <div key={u.id} style={{ background: "#F9F9F9", borderRadius: 10, padding: "8px 10px", marginBottom: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ width: 12, height: 12, borderRadius: "50%", background: u.color, flexShrink: 0 }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <input style={{ ...S.inp, background: "transparent", border: "none", padding: "2px 0", fontWeight: 600, fontSize: 13 }} value={n[i] || ""} onChange={e => { const x = [...n]; x[i] = e.target.value; sN(x); }} />
+            <div style={{ display: "flex", gap: 6, fontSize: 10, color: "#AEAEB2", flexWrap: "wrap" }}>
+              {u.email && <span>📧 {u.email}</span>}
+              {u.phone && <span>📱 {u.phone}</span>}
+              {!u.email && !u.phone && <span style={{ color: "#D1D1D6" }}>Sem contato</span>}
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 3, alignItems: "center", flexShrink: 0 }}>
+            <button onClick={() => setExpanded(expanded === u.id ? null : u.id)} style={{ fontFamily: "inherit", fontSize: 9, background: "#F2F2F7", color: "#86868B", border: "none", borderRadius: 6, padding: "4px 8px", cursor: "pointer" }}>✎</button>
+            <button onClick={() => { setPwEditing(pwEditing === u.id ? null : u.id); setPwVal(""); }} style={{ fontFamily: "inherit", fontSize: 10, background: u.password ? "#FF950022" : "#F2F2F7", color: u.password ? "#FF9500" : "#86868B", border: "none", borderRadius: 6, padding: "4px 8px", cursor: "pointer" }}>{u.password ? "🔒" : "🔓"}</button>
+            {users.length > 1 && <button onClick={() => { if (confirm(`Remover ${u.name}?`)) onRemoveUser(u.id); }} style={{ fontFamily: "inherit", fontSize: 10, background: "none", border: "none", color: "#E8363C88", cursor: "pointer" }}>✕</button>}
+          </div>
+        </div>
+        {expanded === u.id && <div style={{ marginTop: 6, padding: "8px 0 0", borderTop: "1px solid #E5E5EA" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+            <div><label style={S.lbl}>📧 Email</label><input style={S.inp} value={emails[i]} onChange={e => { const x = [...emails]; x[i] = e.target.value; setEmails(x); }} placeholder="email@empresa.com" /></div>
+            <div><label style={S.lbl}>📱 WhatsApp</label><input style={S.inp} value={phones[i]} onChange={e => { const x = [...phones]; x[i] = e.target.value; setPhones(x); }} placeholder="+55 11 99999-0000" /></div>
+          </div>
+        </div>}
+        {pwEditing === u.id && <div style={{ marginTop: 6, padding: "8px 0 0", borderTop: "1px solid #E5E5EA" }}>
+          <label style={S.lbl}>{u.password ? "Alterar senha" : "Definir senha"}</label>
+          <div style={{ display: "flex", gap: 4 }}>
+            <input type="password" style={{ ...S.inp, flex: 1 }} value={pwVal} onChange={e => setPwVal(e.target.value)} placeholder="Nova senha" />
+            <button onClick={() => { onUpdatePassword(u.id, pwVal); setPwEditing(null); }} style={{ ...S.btn, fontSize: 10, padding: "6px 10px" }}>{pwVal ? "Salvar" : "OK"}</button>
+            {u.password && <button onClick={() => { onUpdatePassword(u.id, ""); setPwEditing(null); }} style={{ fontFamily: "inherit", fontSize: 9, background: "#FF3B3012", color: "#E8363C", border: "none", borderRadius: 6, padding: "4px 8px", cursor: "pointer" }}>Remover</button>}
+          </div>
+        </div>}
+      </div>)}
+      <button onClick={() => onSave(users.map((u, i) => ({ ...u, name: n[i] || u.name, email: emails[i] || "", phone: phones[i] || "" })))} style={{ ...S.btn, marginTop: 6, width: "100%" }}>Salvar</button>
+    </div>
+
+    {/* AUDIT LOG */}
+    <div style={{ ...S.card, marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h3 style={{ fontSize: 13, fontWeight: 700, margin: 0 }}>📋 Registro de Alterações</h3>
+        <button onClick={() => setShowAudit(!showAudit)} style={{ fontFamily: "inherit", fontSize: 10, background: "#F2F2F7", color: "#86868B", border: "none", borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}>{showAudit ? "Ocultar" : `Ver (${(audit || []).length})`}</button>
+      </div>
+      {showAudit && <div style={{ marginTop: 10, maxHeight: 300, overflow: "auto" }}>
+        {(!audit || audit.length === 0) ? <p style={{ fontSize: 12, color: "#AEAEB2", textAlign: "center", padding: 16 }}>Nenhuma alteração registrada.</p> :
+          [...audit].reverse().map(a => (
+            <div key={a.id} style={{ padding: "8px 0", borderBottom: "1px solid #F2F2F7", display: "flex", gap: 8, alignItems: "flex-start" }}>
+              <div style={{ width: 6, height: 6, borderRadius: "50%", background: a.action === "remove_user" ? "#E8363C" : a.action === "add_user" ? "#34C759" : "#007AFF", marginTop: 5, flexShrink: 0 }} />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 12, color: "#1D1D1F" }}>{a.detail}</div>
+                <div style={{ fontSize: 10, color: "#AEAEB2", marginTop: 2 }}>Por {un(a.userId)} · {fmtFull(a.timestamp)}</div>
+              </div>
+            </div>
+          ))}
+      </div>}
+    </div>
+
+    <div style={{ ...S.card, marginBottom: 10, border: "1px solid #007AFF22" }}>
+      <h3 style={{ fontSize: 13, fontWeight: 700, marginTop: 0, marginBottom: 6, color: "#007AFF" }}>🔑 Chave API Claude</h3>
+      <p style={{ fontSize: 11, color: "#86868B", marginBottom: 8 }}>Para 🎤 Atualizar e ⚡ Automação</p>
+      <input type="password" style={S.inp} defaultValue={localStorage.getItem("poli-api-key")||""} onChange={function(e){localStorage.setItem("poli-api-key", e.target.value)}} placeholder="sk-ant-..." />
+    </div>
+    <div style={{ ...S.card, border: "1px solid #FF3B3022" }}><h3 style={{ fontSize: 13, fontWeight: 700, marginTop: 0, marginBottom: 4, color: "#E8363C" }}>Restaurar</h3><button onClick={onReset} style={{ fontFamily: "inherit", fontSize: 11, background: "none", color: "#E8363C", border: "1px solid #E8363C44", borderRadius: 8, padding: "6px 14px", cursor: "pointer", marginTop: 4 }}>Restaurar dados</button></div>
+  </div>);
+}
+
+const S = {
+  ctr: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "#F2F2F7" },
+  spin: { width: 24, height: 24, border: "3px solid #E5E5EA", borderTopColor: "#007AFF", borderRadius: "50%", animation: "spin .7s linear infinite" },
+  kf: `@keyframes spin{to{transform:rotate(360deg)}}@keyframes fadeIn{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:none}}@keyframes recording{0%,100%{opacity:1}50%{opacity:.4}}`,
+  h2: { fontSize: 18, fontWeight: 700, margin: "0 0 14px" },
+  card: { background: "#fff", borderRadius: 12, padding: 14, boxShadow: "0 1px 3px rgba(0,0,0,0.04)" },
+  td: { padding: "9px 7px", borderBottom: "1px solid #F2F2F7" },
+  btn: { fontFamily: "'Inter',sans-serif", fontSize: 12, fontWeight: 600, background: "#007AFF", color: "#fff", border: "none", borderRadius: 8, padding: "8px 16px", cursor: "pointer", whiteSpace: "nowrap" },
+  inp: { fontFamily: "'Inter',sans-serif", fontSize: 12, width: "100%", boxSizing: "border-box", background: "#F9F9F9", color: "#1D1D1F", border: "1px solid #E5E5EA", borderRadius: 8, padding: "8px 10px", outline: "none" },
+  lbl: { display: "block", fontSize: 9, fontWeight: 700, color: "#AEAEB2", marginBottom: 3, letterSpacing: .3, textTransform: "uppercase" },
+};
+
+ReactDOM.render(<App/>, document.getElementById("root"));
+</script>
+</body>
+</html>
