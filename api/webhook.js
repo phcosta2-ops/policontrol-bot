@@ -1,4 +1,4 @@
-// Policontrol Bot v7 — Máx 2 perguntas, datas relativas
+// Policontrol Bot v7.1 — Contexto via Upstash, reply obrigatório removido
 const TELEGRAM_TOKEN = "8619850108:AAFk2alsfSQLocua9jPOkzgUD33XPFsIrdc";
 const TG_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 const UPSTASH_URL = process.env.UPSTASH_URL || "https://smooth-dingo-93735.upstash.io";
@@ -33,27 +33,33 @@ const PROJECTS = [
 ].join("\n• ");
 
 const TODAY = () => new Date().toISOString().slice(0, 10);
+const DATE_CONTEXT = `Converta datas relativas para YYYY-MM-DD (hoje=${TODAY()}): "hoje"=${TODAY()}, "amanhã"=+1d, "daqui X dias"=+Xd, "até dia 25"=2026-04-25, "semana que vem"=+7d, "final de abril"=2026-04-30`;
 
-const DATE_CONTEXT = `
-DATAS RELATIVAS — converta para YYYY-MM-DD baseado em hoje (${TODAY()}):
-- "hoje" → ${TODAY()}
-- "amanhã" → calcule +1 dia
-- "daqui X dias" / "em X dias" → calcule +X dias
-- "semana que vem" → +7 dias
-- "mês que vem" → +30 dias
-- "até dia 25" ou "dia 25" → 2026-04-25 (mês atual ou próximo)
-- "25/04" ou "25/04/2026" → 2026-04-25
-- "final de abril" → 2026-04-30
-- "meados de maio" → 2026-05-15`;
+// ========== UPSTASH HELPERS ==========
+async function upstashGet(key) {
+  const r = await fetch(`${UPSTASH_URL}/get/${key}`, { headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` } });
+  const d = await r.json();
+  return d.result ? JSON.parse(d.result) : null;
+}
 
-async function saveToUpstash(update) {
-  const entry = JSON.stringify(update);
-  await fetch(`${UPSTASH_URL}/lpush/poli-telegram-updates/${encodeURIComponent(entry)}`, {
+async function upstashSet(key, value, exSeconds) {
+  await fetch(`${UPSTASH_URL}/set/${key}/${encodeURIComponent(JSON.stringify(value))}${exSeconds ? `/ex/${exSeconds}` : ""}`, {
+    headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` }
+  });
+}
+
+async function upstashDel(key) {
+  await fetch(`${UPSTASH_URL}/del/${key}`, { headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` } });
+}
+
+async function saveUpdate(update) {
+  await fetch(`${UPSTASH_URL}/lpush/poli-telegram-updates/${encodeURIComponent(JSON.stringify(update))}`, {
     headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` }
   });
   console.log("[SAVED]", update.project, update.action);
 }
 
+// ========== CLAUDE ==========
 async function callClaude(sysPrompt, userMsg) {
   const CLAUDE_KEY = process.env.CLAUDE_API_KEY;
   if (!CLAUDE_KEY) throw new Error("CLAUDE_API_KEY não configurada");
@@ -67,6 +73,7 @@ async function callClaude(sysPrompt, userMsg) {
   return d.content.map(i => i.text || "").join("").replace(/```json|```/g, "").trim();
 }
 
+// ========== TELEGRAM ==========
 async function sendTG(chatId, text, replyTo, buttons) {
   const body = { chat_id: chatId, text, parse_mode: "Markdown", reply_to_message_id: replyTo };
   if (buttons) body.reply_markup = JSON.stringify({ inline_keyboard: buttons });
@@ -80,7 +87,7 @@ async function editTG(chatId, msgId, text) {
 
 // ========== HANDLER ==========
 export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(200).send("Bot v7");
+  if (req.method !== "POST") return res.status(200).send("Bot v7.1");
   const update = req.body;
   try {
     if (update.callback_query) { await handleCallback(update.callback_query); return res.status(200).send("OK"); }
@@ -90,35 +97,54 @@ export default async function handler(req, res) {
     if (!msg.text) return res.status(200).send("OK");
     if (msg.text.startsWith("/")) { await handleCommand(msg); return res.status(200).send("OK"); }
 
-    // Reply ao bot
-    if (msg.reply_to_message && String(msg.reply_to_message.from?.id) === TELEGRAM_TOKEN.split(":")[0]) {
-      await handleReply(msg);
-      return res.status(200).send("OK");
-    }
+    const userId = msg.from?.id;
+    const chatId = msg.chat?.id;
 
-    await classifyMessage(msg);
+    // Checar se esse usuário tem conversa pendente
+    const pendingKey = `poli-pending-${chatId}-${userId}`;
+    const pending = await upstashGet(pendingKey);
+
+    if (pending) {
+      // Continua conversa existente
+      await handleFollowUp(msg, pending, pendingKey);
+    } else {
+      // Mensagem nova
+      await classifyMessage(msg);
+    }
   } catch (e) { console.error("Error:", e.message); }
   return res.status(200).send("OK");
 }
 
-// ========== CLASSIFICAR ==========
+// ========== CLASSIFICAR MENSAGEM NOVA ==========
 async function classifyMessage(msg) {
   if (msg.text.length < 8) return;
   const userName = msg.from?.first_name || "Alguém";
+  const userId = msg.from?.id;
+  const chatId = msg.chat?.id;
 
   const sysPrompt = `Analise mensagem de grupo Policontrol.
 Projetos:\n• ${PROJECTS}
 
 JSON puro:
 - Casual/pergunta/opinião → {"type":"skip"}
-- Fato concreto sobre projeto → {"type":"update","project":"nome EXATO da lista","category":"shipping|testing|development|approval|purchase|other","summary":"o que aconteceu"}
+- Fato concreto sobre projeto → {"type":"update","project":"nome EXATO da lista","category":"shipping|testing|other","summary":"o que aconteceu"}
 
-O campo "project" DEVE ser exatamente um nome da lista. Não invente.`;
+O campo "project" DEVE ser exatamente um nome da lista.`;
 
   try {
     const raw = await callClaude(sysPrompt, `${userName}: "${msg.text}"`);
     const result = JSON.parse(raw);
     if (result.type === "skip") return;
+
+    // Salvar contexto pendente no Upstash (expira em 10 min)
+    const pending = {
+      project: result.project,
+      category: result.category,
+      summary: result.summary,
+      round: 1,
+      userName
+    };
+    await upstashSet(`poli-pending-${chatId}-${userId}`, pending, 600);
 
     // Primeira pergunta
     let q = `📋 *${result.project}* — anotei, ${userName}!\n✅ ${result.summary}\n\n`;
@@ -129,70 +155,61 @@ O campo "project" DEVE ser exatamente um nome da lista. Não invente.`;
       q += `📦 Se tiver rastreio ou foto, manda junto.\n\n`;
     }
 
-    q += `Responda por *reply*:\n`;
-    q += `⚡ Próximo passo?\n`;
-    q += `⏰ Prazo? (pode ser "até dia 25", "daqui 10 dias", "amanhã")\n`;
-    q += `[rodada:1]`;
+    q += `Me conta:\n⚡ Qual o *próximo passo*?\n⏰ *Prazo*? (ex: "até dia 25", "daqui 10 dias", "amanhã")`;
 
-    await sendTG(msg.chat.id, q, msg.message_id);
+    await sendTG(chatId, q, msg.message_id);
   } catch (e) { console.error("Classify:", e.message); }
 }
 
-// ========== REPLY ==========
-async function handleReply(msg) {
+// ========== FOLLOW-UP (sem precisar de reply!) ==========
+async function handleFollowUp(msg, pending, pendingKey) {
   const userName = msg.from?.first_name || "Alguém";
-  const botMsg = msg.reply_to_message.text || "";
-
-  // Detectar rodada pela tag no texto do bot
-  const isRound1 = botMsg.includes("[rodada:1]");
-  const isRound2 = botMsg.includes("[rodada:2]");
-
-  // Coletar todo o contexto (mensagem do bot + original se tiver)
-  const originalUserMsg = msg.reply_to_message.reply_to_message?.text || "";
-  const fullContext = `Contexto do bot: "${botMsg}"\nMensagem original: "${originalUserMsg}"\nResposta do usuário: "${msg.text}"`;
 
   const sysPrompt = `Compile atualização de projeto Policontrol.
 ${DATE_CONTEXT}
 
-PROJETOS:\n• ${PROJECTS}
-
-Analise o contexto e a resposta do usuário. Extraia o projeto da mensagem do bot (após 📋).
+Projeto: "${pending.project}"
+Fato original: "${pending.summary}"
+Rodada: ${pending.round}
+Resposta do usuário agora: "${msg.text}"
+${pending.round2context ? "Contexto adicional: " + pending.round2context : ""}
 
 Retorne JSON:
 {
-  "project": "nome EXATO do projeto da lista",
   "action": "o que foi feito",
-  "date": "YYYY-MM-DD (quando foi feito)",
-  "evidence": "evidência/dados ou null",
-  "nextStep": "próximo passo ou null",
-  "deadline": "YYYY-MM-DD do prazo do próximo passo ou null",
-  "missing": ["lista do que ainda falta — vazia se tiver action + nextStep"]
+  "date": "YYYY-MM-DD quando foi feito",
+  "evidence": "evidência ou null",
+  "nextStep": "próximo passo",
+  "deadline": "YYYY-MM-DD prazo do próximo passo ou null",
+  "complete": true/false,
+  "missingQuestion": "se complete=false, UMA pergunta curta do que falta. Se complete=true, null"
 }
 
 REGRAS:
-- Converta TODAS as datas relativas para YYYY-MM-DD
-- Se já tem "action" + "nextStep" → missing vazio
-- Se falta só prazo mas tem nextStep → aceite (missing vazio)
-- Se não tem nextStep → missing = ["próximo passo"]
-- Máximo 2 itens em missing
-- O campo project DEVE ser da lista. Se o bot disse "Fósforo Total" use "Fósforo Total (012/2025) [Des. Químico]"`;
+- Se tem ação + próximo passo → complete=true (prazo é bonus, aceite sem)
+- Se só falta prazo → complete=true (registre sem prazo)
+- Máximo 2 rodadas. Se round=2 → SEMPRE complete=true
+- Converta datas relativas: "até dia 25"=2026-04-25, "daqui 10 dias"=+10d, "amanhã"=+1d`;
 
   try {
-    const raw = await callClaude(sysPrompt, fullContext);
+    const raw = await callClaude(sysPrompt, msg.text);
     const result = JSON.parse(raw);
 
-    // Rodada 1 e falta info → faz UMA pergunta a mais
-    if (isRound1 && result.missing && result.missing.length > 0) {
-      let followUp = `👍 Anotei! Só mais uma coisa:\n`;
-      result.missing.forEach(m => { followUp += `❓ ${m}\n`; });
-      followUp += `\n_Responda por reply_\n[rodada:2]`;
-      await sendTG(msg.chat.id, followUp, msg.message_id);
+    // Rodada 1 e falta info → UMA pergunta mais
+    if (pending.round === 1 && !result.complete && result.missingQuestion) {
+      pending.round = 2;
+      pending.round2context = `Resposta rodada 1: "${msg.text}"`;
+      await upstashSet(pendingKey, pending, 600);
+
+      await sendTG(msg.chat.id, `👍 Anotei! Só mais uma:\n❓ ${result.missingQuestion}`, msg.message_id);
       return;
     }
 
-    // Rodada 2 OU tudo completo → confirmação direto
-    let text = `📋 *${result.project}*\n\n`;
-    text += `✅ *O quê:* ${result.action || "atualização registrada"}\n`;
+    // Tudo completo OU rodada 2 → mostra confirmação
+    await upstashDel(pendingKey);
+
+    let text = `📋 *${pending.project}*\n\n`;
+    text += `✅ *O quê:* ${result.action || pending.summary}\n`;
     text += `📅 *Quando:* ${result.date || TODAY()}\n`;
     if (result.evidence) text += `🔬 *Evidência:* ${result.evidence}\n`;
     if (result.nextStep) text += `⚡ *Próximo passo:* ${result.nextStep}\n`;
@@ -203,16 +220,16 @@ REGRAS:
       { text: "✅ Registrar", callback_data: "reg" },
       { text: "❌ Descartar", callback_data: "del" }
     ]]);
-  } catch (e) { console.error("Reply:", e.message); }
+  } catch (e) {
+    console.error("FollowUp:", e.message);
+    await upstashDel(pendingKey);
+  }
 }
 
 // ========== FOTO ==========
 async function handlePhoto(msg) {
   const userName = msg.from?.first_name || "Alguém";
-  const isReply = msg.reply_to_message && String(msg.reply_to_message.from?.id) === TELEGRAM_TOKEN.split(":")[0];
-  if (isReply) {
-    await sendTG(msg.chat.id, `📷 Foto recebida, ${userName}! Agora responda por *reply* com próximo passo e prazo.`, msg.message_id);
-  }
+  await sendTG(msg.chat.id, `📷 Foto recebida, ${userName}! Agora me diz o próximo passo e prazo.`, msg.message_id);
 }
 
 // ========== BOTÕES ==========
@@ -250,7 +267,7 @@ async function handleCallback(cb) {
         source: "telegram"
       };
 
-      await saveToUpstash(updateEntry);
+      await saveUpdate(updateEntry);
       await editTG(chatId, msgId, msgText.replace("_Confirma?_", "✅ *REGISTRADO*"));
 
       // Confirmação visível
@@ -262,7 +279,7 @@ async function handleCallback(cb) {
       await sendTG(chatId, confirm);
     } catch (e) {
       console.error("Save:", e.message);
-      await editTG(chatId, msgId, msgText.replace("_Confirma?_", "⚠ _Erro ao salvar_"));
+      await editTG(chatId, msgId, msgText.replace("_Confirma?_", "⚠ _Erro_"));
     }
   }
 
@@ -274,7 +291,7 @@ async function handleCallback(cb) {
 async function handleCommand(msg) {
   const cmd = msg.text?.split("@")[0];
   if (cmd === "/start") {
-    await sendTG(msg.chat.id, `🤖 *Bot Policontrol v7*\n\n📱 Atualizações vão direto pro app!\n\n*Como usar:*\n1️⃣ Diga o que fez ("materiais chegaram pro fósforo")\n2️⃣ Eu peço próximo passo e prazo\n3️⃣ Responda por *reply* ("fabricar lote até dia 25")\n4️⃣ Confirma ✅ → no app!\n\n💡 Aceito datas tipo "amanhã", "daqui 10 dias", "até dia 25"\n💡 Use o 🎤 do teclado para ditar\n🔬 Testes precisam de foto/dados\n\n/projetos — ver projetos`, msg.message_id);
+    await sendTG(msg.chat.id, `🤖 *Bot Policontrol*\n\n📱 Atualizações vão direto pro app!\n\n*Como usar:*\n1️⃣ Diga o que fez ("materiais chegaram pro fósforo")\n2️⃣ Eu peço próximo passo e prazo\n3️⃣ Responda normalmente (não precisa de reply!)\n4️⃣ Confirma ✅ → no app!\n\n💡 Aceito: "amanhã", "daqui 10 dias", "até dia 25"\n💡 Use o 🎤 do teclado para ditar\n🔬 Testes precisam de foto/dados\n\n/projetos — ver projetos`, msg.message_id);
   } else if (cmd === "/projetos") {
     await sendTG(msg.chat.id, `📋 *Projetos:*\n\n• ${PROJECTS}`, msg.message_id);
   }
