@@ -1,9 +1,5 @@
-// Policontrol Bot — Vercel Serverless (api/webhook.js)
-// Webhook-based: Telegram chama esta função a cada mensagem
-
+// Policontrol Bot — Vercel + Claude API
 const TELEGRAM_TOKEN = "8619850108:AAFk2alsfSQLocua9jPOkzgUD33XPFsIrdc";
-const GEMINI_KEY = "AIzaSyAe8ZRTH1dnDpIuWDLRp5cm8fpW409f5Hk";
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`;
 const TG_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 
 const PROJECTS = [
@@ -30,14 +26,17 @@ const PROJECTS = [
   "Padrão DQO (006/2026) [Des. Químico]",
 ].join("\n• ");
 
-// ========== HELPERS ==========
-async function callGemini(sysPrompt, userMsg) {
-  const res = await fetch(GEMINI_URL, { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ contents: [{ parts: [{ text: userMsg }] }], systemInstruction: { parts: [{ text: sysPrompt }] }, generationConfig: { temperature: 0.3 } })
+async function callClaude(sysPrompt, userMsg) {
+  const CLAUDE_KEY = process.env.CLAUDE_API_KEY;
+  if (!CLAUDE_KEY) throw new Error("CLAUDE_API_KEY não configurada");
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-api-key": CLAUDE_KEY, "anthropic-version": "2023-06-01" },
+    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, system: sysPrompt, messages: [{ role: "user", content: userMsg }] })
   });
   const d = await res.json();
   if (d.error) throw new Error(d.error.message);
-  return (d.candidates?.[0]?.content?.parts?.[0]?.text || "").replace(/```json|```/g, "").trim();
+  return d.content.map(i => i.text || "").join("").replace(/```json|```/g, "").trim();
 }
 
 async function sendTG(chatId, text, replyTo, buttons) {
@@ -51,151 +50,71 @@ async function editTG(chatId, msgId, text) {
     body: JSON.stringify({ chat_id: chatId, message_id: msgId, text, parse_mode: "Markdown" }) });
 }
 
-// ========== MAIN HANDLER ==========
 export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(200).send("OK");
-
+  if (req.method !== "POST") return res.status(200).send("Bot Policontrol ativo");
   const update = req.body;
-
   try {
-    // Callback (botões)
-    if (update.callback_query) {
-      await handleCallback(update.callback_query);
-      return res.status(200).send("OK");
-    }
-
+    if (update.callback_query) { await handleCallback(update.callback_query); return res.status(200).send("OK"); }
     const msg = update.message;
     if (!msg) return res.status(200).send("OK");
-
-    // Foto durante entrevista
-    if (msg.photo && msg.reply_to_message) {
-      await handlePhotoReply(msg);
-      return res.status(200).send("OK");
-    }
-
+    if (msg.photo && msg.reply_to_message) { await handlePhoto(msg); return res.status(200).send("OK"); }
     if (!msg.text) return res.status(200).send("OK");
-
-    // Comandos
-    if (msg.text.startsWith("/")) {
-      await handleCommand(msg);
-      return res.status(200).send("OK");
-    }
-
-    // Reply ao bot = resposta de entrevista
+    if (msg.text.startsWith("/")) { await handleCommand(msg); return res.status(200).send("OK"); }
     if (msg.reply_to_message && String(msg.reply_to_message.from?.id) === TELEGRAM_TOKEN.split(":")[0]) {
-      await handleReplyToBot(msg);
-      return res.status(200).send("OK");
+      await handleReply(msg); return res.status(200).send("OK");
     }
-
-    // Mensagem normal = classificar
     await classifyMessage(msg);
-
-  } catch (e) {
-    console.error("Error:", e.message);
-  }
-
+  } catch (e) { console.error("Error:", e.message); }
   return res.status(200).send("OK");
 }
 
-// ========== CLASSIFICAR MENSAGEM ==========
 async function classifyMessage(msg) {
   if (msg.text.length < 8) return;
   const userName = msg.from?.first_name || "Alguém";
 
-  const sysPrompt = `Analise mensagem de grupo Policontrol.
-
-PROJETOS:
-• ${PROJECTS}
-
-CLASSIFIQUE (JSON puro):
-- Conversa casual → {"type":"skip"}
-- Pergunta sobre projeto → {"type":"skip"}  
-- Discussão/opinião → {"type":"skip"}
-- FATO concreto sobre projeto (enviou, recebeu, testou, aprovou, comprou, montou) →
-  {"type":"update","project":"nome","whatDid":"o que fez","missingInfo":"lista do que falta: data? previsão próximo passo? resultado/evidência? próximo passo?"}
-
-"Mandei pro Fiore" = update (fato)
-"Acho que devíamos testar" = skip (opinião)
-"Como tá o MPN?" = skip (pergunta)`;
+  const sysPrompt = `Analise mensagem de grupo Policontrol. Projetos:\n• ${PROJECTS}\n\nCLASSIFIQUE (JSON puro):\n- Conversa casual/pergunta/opinião → {"type":"skip"}\n- FATO concreto sobre projeto (enviou, recebeu, testou, aprovou, comprou) → {"type":"update","project":"nome","whatDid":"o que fez"}`;
 
   try {
-    const raw = await callGemini(sysPrompt, `${userName}: "${msg.text}"`);
+    const raw = await callClaude(sysPrompt, `${userName}: "${msg.text}"`);
     const result = JSON.parse(raw);
     if (result.type === "skip") return;
 
-    // Detectou atualização — perguntar o que falta
-    const askPrompt = `Alguém deu uma atualização parcial sobre o projeto "${result.project}":
-"${msg.text}"
+    const askPrompt = `Alguém atualizou o projeto "${result.project}": "${msg.text}"
 
-O que foi dito: ${result.whatDid}
-O que falta: ${result.missingInfo}
-
-Gere UMA mensagem curta, direta e simpática pedindo as informações que faltam.
-A mensagem deve cobrar:
+Gere UMA mensagem curta pedindo o que falta para atualização completa:
 - 📅 Data que foi feito (se não disse)
-- ⏰ Previsão de quando o próximo passo fica pronto
-- 🔬 Resultado/evidência (se faz sentido pedir — teste precisa de dados, envio precisa de comprovante/foto, etc)
-- ⚡ Qual o próximo passo
+- ⏰ Previsão do próximo passo
+- 🔬 Resultado/evidência (se aplicável)
+- ⚡ Próximo passo
 
-NÃO peça o que já foi dito. Seja direto mas educado. Máximo 4 linhas.
-Comece com "📋 *${result.project}* — anotei, ${userName}!" seguido de uma linha com o que entendeu, depois peça o que falta.
+Comece com "📋 *${result.project}* — anotei, ${userName}!" + o que entendeu + peça o que falta. Máx 4 linhas. Texto direto, não JSON.`;
 
-Retorne APENAS o texto da mensagem (não JSON).`;
-
-    const followUp = await callGemini(askPrompt, msg.text);
+    const followUp = await callClaude(askPrompt, msg.text);
     await sendTG(msg.chat.id, followUp, msg.message_id);
-
   } catch (e) { console.error("Classify:", e.message); }
 }
 
-// ========== REPLY AO BOT (resposta da entrevista) ==========
-async function handleReplyToBot(msg) {
+async function handleReply(msg) {
   const userName = msg.from?.first_name || "Alguém";
   const botQuestion = msg.reply_to_message.text || "";
   const originalMsg = msg.reply_to_message.reply_to_message?.text || "";
 
-  const sysPrompt = `Você é gestor de projetos da Policontrol compilando uma atualização.
-
-CONTEXTO:
-- Mensagem original: "${originalMsg}"
-- Bot perguntou: "${botQuestion}"  
-- Pessoa respondeu: "${msg.text}"
-
-PROJETOS: • ${PROJECTS}
-
-Compile TUDO em uma atualização completa. Retorne JSON:
-{
-  "project": "nome do projeto",
-  "complete": true/false,
-  "summary": {
-    "action": "o que foi feito",
-    "date": "quando (ou 'não informado')",
-    "evidence": "resultado/evidência (ou 'não informado')",
-    "nextStep": "próximo passo (ou 'não informado')",
-    "deadline": "previsão (ou 'não informado')"
-  },
-  "followUp": "se complete=false, pergunta o que ainda falta (texto direto). Se complete=true, null"
-}
-
-Se a pessoa disse "não sei" ou "ainda não tem" para algo, aceite e marque como "a definir". Considere complete=true.
-Não insista demais — se já tem ação + pelo menos 1 dado extra (data OU próximo passo), considere complete.`;
+  const sysPrompt = `Compile atualização de projeto Policontrol.\n\nContexto:\n- Original: "${originalMsg}"\n- Bot perguntou: "${botQuestion}"\n- Resposta: "${msg.text}"\n\nRetorne JSON:\n{"project":"nome","summary":{"action":"o que fez","date":"quando","evidence":"evidência ou N/A","nextStep":"próximo passo","deadline":"previsão"},"complete":true/false,"followUp":"se incompleto, pergunta. Se completo, null"}\n\nSe disse "não sei", aceite. Se tem ação + 1 dado extra = complete.`;
 
   try {
-    const raw = await callGemini(sysPrompt, `Resposta de ${userName}: "${msg.text}"`);
+    const raw = await callClaude(sysPrompt, `${userName}: "${msg.text}"`);
     const result = JSON.parse(raw);
 
     if (!result.complete && result.followUp) {
-      // Ainda falta info — pergunta mais (máx 1 rodada extra)
       await sendTG(msg.chat.id, `👍 Anotei!\n\n${result.followUp}`, msg.message_id);
       return;
     }
 
-    // Completo — mostra resumo e pede confirmação
     const s = result.summary;
     let text = `📋 *Atualização: ${result.project}*\n\n`;
     text += `✅ *O quê:* ${s.action}\n`;
     text += `📅 *Quando:* ${s.date}\n`;
-    if (s.evidence && s.evidence !== "não informado") text += `🔬 *Evidência:* ${s.evidence}\n`;
+    if (s.evidence && s.evidence !== "N/A") text += `🔬 *Evidência:* ${s.evidence}\n`;
     text += `⚡ *Próximo:* ${s.nextStep}\n`;
     text += `⏰ *Previsão:* ${s.deadline}\n`;
     text += `\n👤 _${userName}_\n\n_Registro no sistema?_`;
@@ -204,44 +123,29 @@ Não insista demais — se já tem ação + pelo menos 1 dado extra (data OU pr�
       { text: "✅ Registrar", callback_data: "reg" },
       { text: "❌ Descartar", callback_data: "del" }
     ]]);
-
   } catch (e) { console.error("Reply:", e.message); }
 }
 
-// ========== FOTO ==========
-async function handlePhotoReply(msg) {
-  const caption = msg.caption || "Foto/evidência enviada";
-  await sendTG(msg.chat.id, `📷 *Foto recebida!* Registrei como evidência.\n_${caption}_`, msg.message_id);
+async function handlePhoto(msg) {
+  await sendTG(msg.chat.id, `📷 *Foto recebida!* Registrei como evidência.`, msg.message_id);
 }
 
-// ========== CALLBACKS (botões) ==========
 async function handleCallback(cb) {
-  const chatId = cb.message?.chat?.id;
-  const msgId = cb.message?.message_id;
-  const text = cb.message?.text || "";
-
+  const chatId = cb.message?.chat?.id, msgId = cb.message?.message_id, text = cb.message?.text || "";
   if (cb.data === "reg") {
     await editTG(chatId, msgId, text.replace("_Registro no sistema?_", "✅ *REGISTRADO*"));
-    console.log("[REGISTRADO]", text.substring(0, 100));
   } else if (cb.data === "del") {
     await editTG(chatId, msgId, "❌ _Descartado._");
   }
-
   await fetch(`${TG_API}/answerCallbackQuery`, { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ callback_query_id: cb.id }) });
 }
 
-// ========== COMANDOS ==========
 async function handleCommand(msg) {
   const cmd = msg.text?.split("@")[0];
-
   if (cmd === "/start") {
-    await sendTG(msg.chat.id, `🤖 *Bot Policontrol Projetos*\n\nMonitoro o grupo e coleto atualizações completas.\n\n*Como funciona:*\n1️⃣ Alguém menciona algo sobre um projeto\n2️⃣ Eu peço detalhes: data, resultado, próximo passo\n3️⃣ A pessoa responde (texto ou foto)\n4️⃣ Mostro resumo e peço confirmação\n5️⃣ ✅ → registrado\n\n💡 Perguntas e conversas casuais são ignoradas.\n\n/projetos — ver projetos\n/ensinar — me ensina contexto`, msg.message_id);
-  }
-  else if (cmd === "/projetos") {
-    await sendTG(msg.chat.id, `📋 *Projetos monitorados:*\n\n• ${PROJECTS}`, msg.message_id);
-  }
-  else if (cmd === "/ensinar") {
-    await sendTG(msg.chat.id, `📚 *Me ensine!* Responda esta mensagem.\n\nEx:\n_"Fiore testa placas do Medidor de Cloro"_\n_"Firmware = PoliSealer"_\n_"Maurício = eletrônica"_`, msg.message_id);
+    await sendTG(msg.chat.id, `🤖 *Bot Policontrol Projetos*\n\nMonitoro o grupo e coleto atualizações completas.\n\n*Como funciona:*\n1️⃣ Mencione algo sobre um projeto\n2️⃣ Peço detalhes: data, resultado, próximo passo\n3️⃣ Responda (texto ou foto)\n4️⃣ Mostro resumo → confirme\n\n💡 Perguntas e conversas casuais são ignoradas.\n\n/projetos — ver projetos`, msg.message_id);
+  } else if (cmd === "/projetos") {
+    await sendTG(msg.chat.id, `📋 *Projetos:*\n\n• ${PROJECTS}`, msg.message_id);
   }
 }
