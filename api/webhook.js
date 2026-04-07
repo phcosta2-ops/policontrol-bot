@@ -1,6 +1,8 @@
-// Policontrol Bot v4 — Claude AI + Evidências obrigatórias
+// Policontrol Bot v5 — Claude AI + Upstash (dados sincronizados com app)
 const TELEGRAM_TOKEN = "8619850108:AAFk2alsfSQLocua9jPOkzgUD33XPFsIrdc";
 const TG_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
+const UPSTASH_URL = process.env.UPSTASH_URL || "https://smooth-dingo-93735.upstash.io";
+const UPSTASH_TOKEN = process.env.UPSTASH_TOKEN || "gQAAAAAAAW4nAAIncDIwYzk0ODBlZmViOTY0ODZkYTAyN2JhYzJjNmNjMmUxMXAyOTM3MzU";
 
 const PROJECTS = [
   "Placa AP2000 (024/2024) [Des. Industrial] — turbidímetro, Maurício",
@@ -26,6 +28,14 @@ const PROJECTS = [
   "Padrão DQO (006/2026) [Des. Químico]",
 ].join("\n• ");
 
+// ========== UPSTASH ==========
+async function saveToUpstash(update) {
+  await fetch(`${UPSTASH_URL}/lpush/policontrol_updates/${encodeURIComponent(JSON.stringify(update))}`, {
+    headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` }
+  });
+}
+
+// ========== CLAUDE ==========
 async function callClaude(sysPrompt, userMsg) {
   const CLAUDE_KEY = process.env.CLAUDE_API_KEY;
   if (!CLAUDE_KEY) throw new Error("CLAUDE_API_KEY não configurada");
@@ -39,6 +49,7 @@ async function callClaude(sysPrompt, userMsg) {
   return d.content.map(i => i.text || "").join("").replace(/```json|```/g, "").trim();
 }
 
+// ========== TELEGRAM ==========
 async function sendTG(chatId, text, replyTo, buttons) {
   const body = { chat_id: chatId, text, parse_mode: "Markdown", reply_to_message_id: replyTo };
   if (buttons) body.reply_markup = JSON.stringify({ inline_keyboard: buttons });
@@ -52,27 +63,18 @@ async function editTG(chatId, msgId, text) {
 
 // ========== HANDLER ==========
 export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(200).send("Bot Policontrol v4 ativo");
+  if (req.method !== "POST") return res.status(200).send("Bot Policontrol v5");
   const update = req.body;
   try {
     if (update.callback_query) { await handleCallback(update.callback_query); return res.status(200).send("OK"); }
     const msg = update.message;
     if (!msg) return res.status(200).send("OK");
-
-    // Foto (com ou sem reply)
     if (msg.photo) { await handlePhoto(msg); return res.status(200).send("OK"); }
-    // Documento/arquivo
-    if (msg.document) { await handleDoc(msg); return res.status(200).send("OK"); }
-
     if (!msg.text) return res.status(200).send("OK");
     if (msg.text.startsWith("/")) { await handleCommand(msg); return res.status(200).send("OK"); }
-
-    // Reply ao bot
     if (msg.reply_to_message && String(msg.reply_to_message.from?.id) === TELEGRAM_TOKEN.split(":")[0]) {
-      await handleReply(msg);
-      return res.status(200).send("OK");
+      await handleReply(msg); return res.status(200).send("OK");
     }
-
     await classifyMessage(msg);
   } catch (e) { console.error("Error:", e.message); }
   return res.status(200).send("OK");
@@ -83,70 +85,20 @@ async function classifyMessage(msg) {
   if (msg.text.length < 8) return;
   const userName = msg.from?.first_name || "Alguém";
 
-  const sysPrompt = `Analise mensagem de grupo Policontrol. Projetos:\n• ${PROJECTS}
-
-CLASSIFIQUE (JSON puro):
-- Conversa casual/pergunta/opinião → {"type":"skip"}
-- FATO concreto sobre projeto → {"type":"update","project":"nome","category":"shipping|testing|development|approval|purchase|other","whatDid":"o que fez"}
-
-Categorias:
-- "shipping": enviou, mandou, despachou peças/componentes/material
-- "testing": testou, validou, mediu, analisou, resultado de teste
-- "development": desenvolveu, programou, montou, projetou
-- "approval": aprovou, liberou, homologou
-- "purchase": comprou, recebeu compra, orçamento
-- "other": qualquer outro fato concreto`;
+  const sysPrompt = `Analise mensagem de grupo Policontrol. Projetos:\n• ${PROJECTS}\n\nCLASSIFIQUE (JSON puro):\n- Conversa casual/pergunta/opinião → {"type":"skip"}\n- FATO concreto sobre projeto → {"type":"update","project":"nome","category":"shipping|testing|development|approval|purchase|other","whatDid":"o que fez"}`;
 
   try {
     const raw = await callClaude(sysPrompt, `${userName}: "${msg.text}"`);
     const result = JSON.parse(raw);
     if (result.type === "skip") return;
 
-    // Montar perguntas baseadas na CATEGORIA
-    let askPrompt = `Alguém atualizou o projeto "${result.project}": "${msg.text}"
-Categoria: ${result.category}
+    let rules = "";
+    if (result.category === "shipping") rules = `ENVIO — peça: 📅 Data, 📦 Rastreio ou foto comprovante, ⏰ Previsão entrega, ⚡ Próximo passo. Diga "manda foto ou rastreio se tiver"`;
+    else if (result.category === "testing") rules = `TESTE — OBRIGATÓRIO evidência! Peça: 📅 Data, 🔬 Dados/leituras/foto do teste (OBRIGATÓRIO!), ✅ Passou?, ⚡ Próximo passo. Diga "Preciso dos dados do teste para registrar"`;
+    else if (result.category === "approval") rules = `APROVAÇÃO — peça: 📅 Data, 👤 Quem aprovou, 📄 Documento, ⚡ Próximo passo`;
+    else rules = `GERAL — peça: 📅 Data, ⏰ Previsão, ⚡ Próximo passo, 📷 Foto se tiver`;
 
-Gere UMA mensagem pedindo o que falta. REGRAS POR CATEGORIA:
-
-`;
-    if (result.category === "shipping") {
-      askPrompt += `ENVIO — pergunte:
-- 📅 Data do envio
-- 📦 Número de rastreio (se tiver)
-- 📷 Pedir foto do comprovante de envio
-- ⏰ Previsão de entrega
-- ⚡ Próximo passo após entrega
-Diga: "Se tiver, manda foto do comprovante ou número de rastreio"`;
-    } else if (result.category === "testing") {
-      askPrompt += `TESTE — OBRIGATÓRIO pedir evidência! Pergunte:
-- 📅 Data do teste
-- 🔬 OBRIGATÓRIO: Dados de leitura, resultados, ou foto do teste (sem isso não registro!)
-- ✅ Passou ou não? Qual critério?
-- ⚡ Próximo passo
-Deixe claro: "Preciso dos dados do teste (leituras, fotos, laudo) para registrar. Sem evidência não consigo validar."`;
-    } else if (result.category === "approval") {
-      askPrompt += `APROVAÇÃO — pergunte:
-- 📅 Data da aprovação
-- 👤 Quem aprovou?
-- 📄 Tem documento/email de aprovação? Manda foto ou encaminha
-- ⚡ Próximo passo`;
-    } else if (result.category === "purchase") {
-      askPrompt += `COMPRA — pergunte:
-- 📅 Data da compra
-- 💰 Valor (se relevante)
-- 📦 Previsão de entrega
-- 📄 Tem nota/comprovante? Manda foto
-- ⚡ Próximo passo`;
-    } else {
-      askPrompt += `GERAL — pergunte:
-- 📅 Data
-- ⏰ Previsão do próximo passo
-- ⚡ Próximo passo
-- 📷 Se tiver foto ou documento, manda junto`;
-    }
-
-    askPrompt += `\n\nComece com "📋 *${result.project}* — anotei, ${userName}!" + o que entendeu + peça o que falta. Máx 5 linhas. Texto direto, não JSON.`;
-
+    const askPrompt = `Atualização do projeto "${result.project}": "${msg.text}"\n${rules}\n\nComece com "📋 *${result.project}* — anotei, ${userName}!" + entendeu + peça falta. Máx 5 linhas. Texto, não JSON.`;
     const followUp = await callClaude(askPrompt, msg.text);
     await sendTG(msg.chat.id, followUp, msg.message_id);
   } catch (e) { console.error("Classify:", e.message); }
@@ -157,61 +109,33 @@ async function handleReply(msg) {
   const userName = msg.from?.first_name || "Alguém";
   const botQuestion = msg.reply_to_message.text || "";
   const originalMsg = msg.reply_to_message.reply_to_message?.text || "";
+  const isTest = /teste|leitura|resultado|evidência|validação/i.test(botQuestion);
 
-  // Detectar categoria pelo contexto do bot
-  const isTestContext = /teste|leitura|resultado|análise|medição|validação|evidência/i.test(botQuestion);
-  const isShipContext = /envio|rastreio|comprovante|despacho|entrega/i.test(botQuestion);
-
-  const sysPrompt = `Compile atualização de projeto Policontrol.
-
-Contexto:
-- Original: "${originalMsg}"
-- Bot perguntou: "${botQuestion}"
-- Resposta: "${msg.text}"
-- Tem foto anexa: NÃO
-
-${isTestContext ? "⚠ CONTEXTO DE TESTE: Se não enviou dados/fotos/leituras, marque evidenceOk=false e insista!" : ""}
-${isShipContext ? "📦 CONTEXTO DE ENVIO: Se não enviou rastreio/foto, aceite mas registre como pendente." : ""}
-
-Retorne JSON:
-{
-  "project": "nome",
-  "summary": {
-    "action": "o que fez",
-    "date": "quando",
-    "evidence": "dados/rastreio/comprovante ou 'pendente'",
-    "nextStep": "próximo passo",
-    "deadline": "previsão"
-  },
-  "evidenceOk": true/false,
-  "complete": true/false,
-  "followUp": "se incompleto ou sem evidência obrigatória, pergunta. Se completo, null"
-}
-
-Se evidenceOk=false em contexto de TESTE, NÃO marque complete=true. Testes PRECISAM de evidência.
-Para envios, se não tem rastreio/foto, aceite mas coloque evidence="Comprovante pendente".`;
+  const sysPrompt = `Compile atualização Policontrol.\nOriginal: "${originalMsg}"\nBot: "${botQuestion}"\nResposta: "${msg.text}"\n${isTest ? "TESTE: sem dados/foto = evidenceOk=false, NÃO complete!" : ""}\n\nJSON: {"project":"nome","summary":{"action":"","date":"","evidence":"","nextStep":"","deadline":""},"evidenceOk":true/false,"complete":true/false,"followUp":"pergunta ou null"}`;
 
   try {
     const raw = await callClaude(sysPrompt, `${userName}: "${msg.text}"`);
     const result = JSON.parse(raw);
 
     if (!result.complete && result.followUp) {
-      await sendTG(msg.chat.id, `${result.followUp}`, msg.message_id);
+      await sendTG(msg.chat.id, result.followUp, msg.message_id);
       return;
     }
 
     const s = result.summary;
+    // Encode summary in callback data for Upstash save
+    const updateData = JSON.stringify({ p: result.project, a: s.action, d: s.date, e: s.evidence, n: s.nextStep, dl: s.deadline, u: userName });
+    const encodedData = Buffer.from(updateData).toString("base64").substring(0, 60);
+
     let text = `📋 *Atualização: ${result.project}*\n\n`;
-    text += `✅ *O quê:* ${s.action}\n`;
-    text += `📅 *Quando:* ${s.date}\n`;
-    if (s.evidence) text += `🔬 *Evidência:* ${s.evidence}\n`;
-    text += `⚡ *Próximo:* ${s.nextStep}\n`;
-    text += `⏰ *Previsão:* ${s.deadline}\n`;
+    text += `✅ *O quê:* ${s.action}\n📅 *Quando:* ${s.date}\n`;
+    if (s.evidence && s.evidence !== "N/A" && s.evidence !== "pendente") text += `🔬 *Evidência:* ${s.evidence}\n`;
+    text += `⚡ *Próximo:* ${s.nextStep}\n⏰ *Previsão:* ${s.deadline}\n`;
     if (!result.evidenceOk) text += `\n⚠️ _Evidência pendente_\n`;
     text += `\n👤 _${userName}_\n\n_Registro no sistema?_`;
 
     await sendTG(msg.chat.id, text, msg.message_id, [[
-      { text: "✅ Registrar", callback_data: "reg" },
+      { text: "✅ Registrar", callback_data: `reg_${encodedData}` },
       { text: "❌ Descartar", callback_data: "del" }
     ]]);
   } catch (e) { console.error("Reply:", e.message); }
@@ -224,75 +148,60 @@ async function handlePhoto(msg) {
   const isReply = msg.reply_to_message && String(msg.reply_to_message.from?.id) === TELEGRAM_TOKEN.split(":")[0];
 
   if (isReply) {
-    // Foto como resposta ao bot = evidência
     const botQuestion = msg.reply_to_message.text || "";
-
-    const sysPrompt = `O usuário enviou uma FOTO como evidência para um projeto Policontrol.
-Contexto do bot: "${botQuestion}"
-Legenda da foto: "${caption}"
-
-Compile o que temos e retorne JSON:
-{
-  "project": "nome do projeto (extraia do contexto)",
-  "summary": {
-    "action": "ação original",
-    "date": "data se mencionada",
-    "evidence": "📷 Foto enviada${caption ? ' — ' + caption : ''}",
-    "nextStep": "próximo passo ou 'a definir'",
-    "deadline": "previsão ou 'a definir'"
-  }
-}`;
-
+    const sysPrompt = `Foto enviada como evidência. Contexto: "${botQuestion}" Legenda: "${caption}"\nCompile JSON: {"project":"nome","summary":{"action":"","date":"","evidence":"📷 Foto${caption ? ' — '+caption : ''}","nextStep":"a definir","deadline":"a definir"}}`;
     try {
-      const raw = await callClaude(sysPrompt, `Foto de ${userName}. Legenda: "${caption || 'sem legenda'}"`);
+      const raw = await callClaude(sysPrompt, `Foto de ${userName}`);
       const result = JSON.parse(raw);
       const s = result.summary;
+      const updateData = JSON.stringify({ p: result.project, a: s.action, d: s.date, e: s.evidence, n: s.nextStep, dl: s.deadline, u: userName });
+      const encodedData = Buffer.from(updateData).toString("base64").substring(0, 60);
 
-      let text = `📋 *Atualização: ${result.project}*\n\n`;
-      text += `✅ *O quê:* ${s.action}\n`;
-      if (s.date) text += `📅 *Quando:* ${s.date}\n`;
-      text += `📷 *Evidência:* Foto recebida${caption ? ' — ' + caption : ''}\n`;
-      text += `⚡ *Próximo:* ${s.nextStep}\n`;
-      text += `⏰ *Previsão:* ${s.deadline}\n`;
-      text += `\n👤 _${userName}_\n\n_Registro no sistema?_`;
-
+      let text = `📋 *${result.project}*\n✅ ${s.action}\n📷 Foto recebida${caption ? ' — '+caption : ''}\n👤 _${userName}_\n\n_Registro?_`;
       await sendTG(msg.chat.id, text, msg.message_id, [[
-        { text: "✅ Registrar", callback_data: "reg" },
+        { text: "✅ Registrar", callback_data: `reg_${encodedData}` },
         { text: "❌ Descartar", callback_data: "del" }
       ]]);
-    } catch (e) {
-      await sendTG(msg.chat.id, `📷 *Foto recebida!* Registrei como evidência, ${userName}.`, msg.message_id);
-      console.error("Photo:", e.message);
-    }
-  } else {
-    // Foto solta no grupo — ignorar ou detectar contexto
-    if (caption && caption.length > 10) {
-      // Foto com legenda longa = possível atualização
-      await classifyMessage({ ...msg, text: caption });
-    }
-  }
-}
-
-// ========== DOCUMENTO ==========
-async function handleDoc(msg) {
-  const caption = msg.caption || "";
-  const fileName = msg.document?.file_name || "";
-  const userName = msg.from?.first_name || "Alguém";
-
-  if (msg.reply_to_message && String(msg.reply_to_message.from?.id) === TELEGRAM_TOKEN.split(":")[0]) {
-    await sendTG(msg.chat.id, `📄 *Documento recebido!* _${fileName}_\nRegistrei como evidência, ${userName}.`, msg.message_id);
+    } catch (e) { await sendTG(msg.chat.id, `📷 Foto recebida, ${userName}!`, msg.message_id); }
   }
 }
 
 // ========== CALLBACKS ==========
 async function handleCallback(cb) {
   const chatId = cb.message?.chat?.id, msgId = cb.message?.message_id, text = cb.message?.text || "";
-  if (cb.data === "reg") {
-    await editTG(chatId, msgId, text.replace("_Registro no sistema?_", "✅ *REGISTRADO*"));
-    console.log("[REG]", text.substring(0, 120));
+
+  if (cb.data.startsWith("reg_")) {
+    // Parse update from message text (more reliable than callback data)
+    const lines = text.split("\n");
+    const project = (lines.find(l => l.includes("Atualização:")) || lines[0] || "").replace(/[📋*]/g, "").replace("Atualização:", "").trim();
+    const getField = (emoji) => { const l = lines.find(l => l.includes(emoji)); return l ? l.split(":").slice(1).join(":").replace(/\*/g, "").trim() : ""; };
+
+    const update = {
+      id: Date.now().toString(36),
+      project: project,
+      action: getField("O quê"),
+      date: getField("Quando"),
+      evidence: getField("Evidência"),
+      nextStep: getField("Próximo"),
+      deadline: getField("Previsão"),
+      userName: (lines.find(l => l.includes("👤")) || "").replace(/[👤_]/g, "").trim(),
+      timestamp: new Date().toISOString(),
+      source: "telegram"
+    };
+
+    // Salva no Upstash
+    try {
+      await saveToUpstash(update);
+      await editTG(chatId, msgId, text.replace("_Registro no sistema?_", "✅ *REGISTRADO NO SISTEMA*\n_Sincronizado com o app_"));
+      console.log("[SAVED]", update.project, update.action);
+    } catch (e) {
+      await editTG(chatId, msgId, text.replace("_Registro no sistema?_", "✅ *REGISTRADO* ⚠️ _Erro ao sincronizar_"));
+      console.error("Upstash:", e.message);
+    }
   } else if (cb.data === "del") {
     await editTG(chatId, msgId, "❌ _Descartado._");
   }
+
   await fetch(`${TG_API}/answerCallbackQuery`, { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ callback_query_id: cb.id }) });
 }
@@ -301,7 +210,7 @@ async function handleCallback(cb) {
 async function handleCommand(msg) {
   const cmd = msg.text?.split("@")[0];
   if (cmd === "/start") {
-    await sendTG(msg.chat.id, `🤖 *Bot Policontrol Projetos v4*\n\nMonitoro o grupo e coleto atualizações completas.\n\n*Regras de evidência:*\n🔬 *Testes:* OBRIGATÓRIO enviar dados, leituras ou fotos\n📦 *Envios:* Peço rastreio ou foto do comprovante\n📄 *Aprovações:* Peço documento ou email\n🛒 *Compras:* Peço nota ou comprovante\n\n*Como usar:*\n1️⃣ Mencione algo sobre um projeto\n2️⃣ Eu peço detalhes e evidências\n3️⃣ Responda com *reply* (segure minha mensagem → responder)\n4️⃣ Mande fotos/docs como evidência\n5️⃣ Confirme → ✅ registrado\n\n/projetos — ver projetos`, msg.message_id);
+    await sendTG(msg.chat.id, `🤖 *Bot Policontrol v5*\n\n📱 Atualizações registradas aqui aparecem automaticamente no app!\n\n*Regras:*\n🔬 Testes → OBRIGATÓRIO evidência\n📦 Envios → Peço rastreio/foto\n\n*Como:*\n1️⃣ Mencione um projeto\n2️⃣ Responda meus pedidos com *reply*\n3️⃣ Mande fotos como evidência\n4️⃣ Confirme → aparece no app\n\n/projetos — lista`, msg.message_id);
   } else if (cmd === "/projetos") {
     await sendTG(msg.chat.id, `📋 *Projetos:*\n\n• ${PROJECTS}`, msg.message_id);
   }
