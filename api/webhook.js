@@ -73,6 +73,14 @@ async function callClaude(sysPrompt, userMsg) {
   return d.content.map(i => i.text || "").join("").replace(/```json|```/g, "").trim();
 }
 
+function extractJSON(text) {
+  // Find first { and last } to extract JSON from mixed text
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end === -1) throw new Error("No JSON found");
+  return JSON.parse(text.substring(start, end + 1));
+}
+
 // ========== TELEGRAM ==========
 async function sendTG(chatId, text, replyTo, buttons) {
   const body = { chat_id: chatId, text, parse_mode: "Markdown", reply_to_message_id: replyTo };
@@ -133,7 +141,7 @@ O campo "project" DEVE ser exatamente um nome da lista.`;
 
   try {
     const raw = await callClaude(sysPrompt, `${userName}: "${msg.text}"`);
-    const result = JSON.parse(raw);
+    const result = extractJSON(raw);
     if (result.type === "skip") return;
 
     // Salvar contexto pendente no Upstash (expira em 10 min)
@@ -193,7 +201,7 @@ REGRAS:
 
   try {
     const raw = await callClaude(sysPrompt, msg.text);
-    const result = JSON.parse(raw);
+    const result = extractJSON(raw);
 
     // Rodada 1 e falta info → UMA pergunta mais
     if (pending.round === 1 && !result.complete && result.missingQuestion) {
