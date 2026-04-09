@@ -1,0 +1,20 @@
+name: Relatório de Projetos
+on:
+  schedule:
+    - cron: '0 12 1,21 * *'  # Dia 1 e 21 de cada mês às 12h UTC (9h BRT)
+  workflow_dispatch: # Permite rodar manualmente
+
+jobs:
+  send-report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Send Report
+        env:
+          RESEND_KEY: ${{ secrets.RESEND_KEY }}
+          UPSTASH_URL: ${{ secrets.UPSTASH_URL }}
+          UPSTASH_TOKEN: ${{ secrets.UPSTASH_TOKEN }}
+        run: node report/send-report.js
